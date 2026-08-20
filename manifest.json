@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "net.ironinsights.spanned-background",
+  "name": "Spanned Background",
+  "version": "1.0.0",
+  "author": "Marc Ferro",
+  "description": "Draws one wallpaper stretched across every connected monitor, Windows 'Span' style. Drop-in replacement for the built-in omarchy.background service.",
+  "kinds": [
+    "service"
+  ],
+  "entryPoints": {
+    "service": "SpannedBackground.qml"
+  }
+}
