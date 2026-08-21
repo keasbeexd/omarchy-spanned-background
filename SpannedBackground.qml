@@ -98,6 +98,11 @@ Item {
     geometryValid = true
   }
 
+  function scheduleGeometryUpdate() {
+    recomputeGeometry()
+    geometryTimer.restart()
+  }
+
   function refreshBackground() {
     if (!readlinkProc.running) readlinkProc.running = true
   }
@@ -169,7 +174,9 @@ Item {
   function applySpan(enabled, persist) {
     var next = !!enabled
     if (next !== spanEnabled) spanEnabled = next
-    if (persist && !spanWriteProc.running) spanWriteProc.running = true
+    // Debounced rather than fired directly: two toggles in quick succession
+    // must leave the file holding the *last* value, not the first.
+    if (persist) spanPersistTimer.restart()
   }
 
   function openSelector() {
@@ -241,11 +248,26 @@ Item {
     }
 
     // Extra: omarchy-shell -q background span on|off|toggle
+    // Anything else is refused rather than guessed at -- a mistyped "on" must
+    // not silently turn spanning off.
     function span(mode: string): void {
       var m = String(mode || "").trim().toLowerCase()
       if (m === "on" || m === "true" || m === "1") root.applySpan(true, true)
       else if (m === "off" || m === "false" || m === "0") root.applySpan(false, true)
-      else root.applySpan(!root.spanEnabled, true)
+      else if (m === "toggle" || m === "") root.applySpan(!root.spanEnabled, true)
+      else console.warn("spanned-background: unknown span mode '" + mode + "' (expected on, off or toggle)")
+    }
+  }
+
+  // Writes the current value once things have settled; if a write is somehow
+  // still in flight, wait and try again rather than dropping it.
+  Timer {
+    id: spanPersistTimer
+    interval: 200
+    repeat: false
+    onTriggered: {
+      if (spanWriteProc.running) spanPersistTimer.restart()
+      else spanWriteProc.running = true
     }
   }
 
@@ -256,11 +278,12 @@ Item {
     onTriggered: root.applyPendingTheme()
   }
 
-  // Debounces the burst of geometry changes that arrives when a monitor is
-  // plugged in, unplugged, rotated or rescaled.
+  // Recompute right away so a hotplug never leaves a frame drawn against the
+  // old bounding box, then again once the layout has stopped moving -- a single
+  // reshuffle can report several intermediate positions before it settles.
   Timer {
     id: geometryTimer
-    interval: 80
+    interval: 120
     repeat: false
     onTriggered: root.recomputeGeometry()
   }
@@ -268,7 +291,7 @@ Item {
   Connections {
     target: Quickshell
     function onScreensChanged() {
-      geometryTimer.restart()
+      root.scheduleGeometryUpdate()
     }
   }
 
@@ -304,8 +327,22 @@ Item {
 
       screen: modelData
       anchors { top: true; bottom: true; left: true; right: true }
+      visible: !remapGuard.remapping
       color: "transparent"
+
+      // Kept from the stock plugin: a background surface that stops receiving
+      // updates has been observed to lose its committed buffer, leaving a black
+      // desktop until omarchy-shell is restarted.
       updatesEnabled: true
+
+      // Hyprland leaves an already-mapped layer surface at its old global
+      // position when its monitor moves within the layout, so the surface has
+      // to be unmapped and remapped. Undocking, replugging and `hyprctl reload`
+      // all hit this, and this plugin makes those events load-bearing.
+      ScreenMoveRemap {
+        id: remapGuard
+        window: panel
+      }
 
       WlrLayershell.namespace: "omarchy-background"
       WlrLayershell.layer: WlrLayer.Background
@@ -314,37 +351,47 @@ Item {
 
       property bool maskReady: false
 
-      // Watched so the virtual bounding box is recomputed when this output
-      // moves or resizes. Reading them here is what keeps the bindings live.
+      // Mirrors of this output's geometry. ShellScreen emits xChanged/yChanged
+      // and friends, so these fire on layout changes and are what recompute the
+      // shared bounding box.
       readonly property real screenX: modelData && root.isNum(modelData.x) ? modelData.x : 0
       readonly property real screenY: modelData && root.isNum(modelData.y) ? modelData.y : 0
       readonly property real screenW: modelData && root.isNum(modelData.width) ? modelData.width : 0
       readonly property real screenH: modelData && root.isNum(modelData.height) ? modelData.height : 0
 
-      onScreenXChanged: geometryTimer.restart()
-      onScreenYChanged: geometryTimer.restart()
-      onScreenWChanged: geometryTimer.restart()
-      onScreenHChanged: geometryTimer.restart()
+      onScreenXChanged: root.scheduleGeometryUpdate()
+      onScreenYChanged: root.scheduleGeometryUpdate()
+      onScreenWChanged: root.scheduleGeometryUpdate()
+      onScreenHChanged: root.scheduleGeometryUpdate()
 
-      // Where the shared canvas sits relative to this output. When spanning is
-      // off these collapse to the panel itself, which is exactly stock behaviour.
+      // Where the shared canvas sits relative to this output. With spanning off
+      // these collapse onto the content item, which is stock `anchors.fill`
+      // behaviour. They deliberately track `stage` rather than the window: with
+      // opposite anchors set, PanelWindow ignores width/height as inputs and
+      // reading them back can hand you a stale zero.
       readonly property real canvasX: root.spanning ? -(screenX - root.virtualX) : 0
       readonly property real canvasY: root.spanning ? -(screenY - root.virtualY) : 0
-      readonly property real canvasW: root.spanning ? root.virtualWidth : panel.width
-      readonly property real canvasH: root.spanning ? root.virtualHeight : panel.height
+      readonly property real canvasW: root.spanning ? root.virtualWidth : stage.width
+      readonly property real canvasH: root.spanning ? root.virtualHeight : stage.height
 
+      // Deliberately does NOT require the wipe to be sitting at zero. Each
+      // panel decodes the incoming image independently, so on a multi-monitor
+      // setup the second screen almost always becomes ready after the animation
+      // has started; gating on that would leave it masked out for the whole
+      // transition and then hard-cut. Joining a wipe in progress is the point.
       function maybeStartReveal() {
-        if (!root.incomingBackground || root.revealProgress !== 0 || maskReady) return
+        if (!root.incomingBackground || maskReady) return
         if (incomingFrame.status !== Image.Ready) return
         Qt.callLater(function() {
-          if (!root.incomingBackground || root.revealProgress !== 0 || maskReady) return
+          if (!root.incomingBackground || panel.maskReady) return
           if (incomingFrame.status !== Image.Ready) return
           root.startReveal(panel)
         })
       }
 
-      // Everything is clipped to the output, so each screen only ever rasterises
-      // its own slice of the canvas -- no giant per-monitor textures.
+      // Clipped to the output, so each screen only ever rasterises its own slice
+      // of the canvas. Every panel asks for the same image at the same size, so
+      // Qt's pixmap cache keeps one decode between them, exactly as in stock.
       Item {
         id: stage
         anchors.fill: parent
@@ -360,8 +407,6 @@ Item {
           fillMode: Image.PreserveAspectCrop
           asynchronous: true
           cache: true
-          smooth: true
-          mipmap: true
           onStatusChanged: {
             if (status === Image.Ready && root.finishingTransition) {
               root.incomingBackground = ""
