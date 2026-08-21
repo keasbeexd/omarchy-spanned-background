@@ -5,6 +5,7 @@
   "version": "1.0.0",
   "author": "Marc Ferro",
   "description": "Draws one wallpaper stretched across every connected monitor, Windows 'Span' style. Drop-in replacement for the built-in omarchy.background service.",
+  "license": "MIT",
   "kinds": [
     "service"
   ],
