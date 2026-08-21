@@ -1,0 +1,12 @@
+# Qt / QML build leftovers
+*.qmlc
+*.jsc
+.qmlls.ini
+.qmlls.build
+
+# Editor and OS noise
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
