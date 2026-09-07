@@ -1,5 +1,7 @@
 # Spanned Background
 
+![One wallpaper drawn across three monitors, edge to edge.](preview.png)
+
 An [Omarchy](https://omarchy.org) **Quattro** shell plugin that treats all of
 your monitors as one continuous canvas and paints a single wallpaper across
 them — the equivalent of the Windows "Span" wallpaper fit. Edge to edge, no
