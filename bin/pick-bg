@@ -48,8 +48,11 @@ esac
 # look like paths and rejects paths that look like shell strings.
 sel="${sel%$'\n'}"
 [ -n "$sel" ] || exit 0
+# `[[:cntrl:]]` rather than a hand-rolled `[$'\x00'-$'\x1f'$'\x7f']`: bash
+# truncates strings at NUL, so `$'\x00'` becomes empty and the bracket
+# collapses to `[-\x1f\x7f]`, matching literal `-` in any legitimate path.
 case "$sel" in
-  *[$'\x00'-$'\x1f'$'\x7f']*)
+  *[[:cntrl:]]*)
     echo "spanned-background/pick-bg: picker output rejected (control character)" >&2
     exit 1 ;;
 esac
