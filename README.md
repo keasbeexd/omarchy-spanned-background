@@ -74,7 +74,7 @@ Everything else is unchanged:
 | double-click the desktop | background picker |
 | right-double-click the desktop | theme switcher |
 
-## Uninstall
+## Removing
 
 ```bash
 omarchy plugin disable keasbeexd.spanned-background
@@ -82,8 +82,15 @@ omarchy plugin enable omarchy.background
 omarchy plugin remove keasbeexd.spanned-background     # if installed via git
 ```
 
-Removing the plugin leaves `~/.config/omarchy/spanned-background.conf` behind;
-delete it if you want no trace.
+`omarchy plugin remove` deletes the plugin directory and all bundled scripts.
+It does **not** touch:
+
+- `~/.config/omarchy/spanned-background.conf` — the one-line file holding
+  `span=on` or `span=off`. Delete it manually if you want no trace.
+
+Nothing else is left behind: no daemons, no systemd units, no udev rules, no
+`sudoers` entries, no polkit actions, no cache directory, no state directory,
+no keyring items, no packages installed, no shared configuration edited.
 
 ## How it works
 
@@ -133,17 +140,44 @@ falls back to stock per-monitor rendering rather than drawing something wrong.
 ## What it does on your system
 
 Omarchy plugins run unsandboxed inside the shell process, so here is the full
-list of what this one touches:
+list of what this one touches. Every file read and every command invocation
+routes through a bundled bash helper in `bin/`; the QML never issues a shell
+string, and every helper is invoked by absolute path with its arguments as
+separate argv elements.
 
-- **Reads** `~/.local/state/omarchy/current/background` (the symlink Omarchy
-  already maintains) via `readlink`, and the wallpaper image itself.
-- **Reads and writes** `~/.config/omarchy/spanned-background.conf`, a
-  single-line file holding `span=on` or `span=off`.
+- **Reads**, via `bin/resolve-bg`, the symlink Omarchy maintains at
+  `~/.local/state/omarchy/current/background`. The helper caps `readlink`
+  output at 4096 bytes, refuses anything that is not a regular file owned by
+  the current user, and rejects paths with control characters before the
+  result reaches the wallpaper renderer.
+- **Reads**, via `bin/read-conf`, `~/.config/omarchy/spanned-background.conf`
+  using `dd iflag=nofollow,nonblock,count_bytes` at most 129 bytes at a time,
+  so a symlink or FIFO planted at that name is refused rather than followed
+  or blocked on.
+- **Writes**, via `bin/write-conf`, the same file. The write creates an
+  unpredictable temporary via `mktemp` in the destination directory, chmods it
+  600, writes the payload, and `mv -f -T`s it over the destination — so a
+  planted symlink at the destination is *replaced* by `rename(2)` rather than
+  truncating whatever it pointed at. The value on argv is validated against
+  the closed set `{on, off}` before the helper touches the filesystem.
 - **Runs**, only when you double-click the desktop, the same two commands the
   stock plugin runs: `omarchy-theme-bg-switcher` / `omarchy-theme-bg-set` and
-  `omarchy-theme-switcher` / `omarchy-theme-set`.
-- **No network access, no elevated privileges, no external dependencies**, and
-  nothing outside `~/.config/omarchy` is ever written.
+  `omarchy-theme-switcher` / `omarchy-theme-set`. Each pair runs under
+  `setsid -w timeout -k 2 60` in `bin/pick-bg` / `bin/pick-theme`, with a
+  4 KiB output cap and control-character rejection on the picker's output
+  before it becomes an argv element of the setter.
+- Reads the wallpaper image itself. Every path that reaches `Image.source`
+  is either produced by a helper above or arrives via IPC and is put through
+  the same absolute-path + control-char + length check.
+- **No network access, no elevated privileges, no external packages**, and
+  nothing outside `~/.config/omarchy/spanned-background.conf` is ever written.
+
+The `background` IPC surface exposes `refresh`, `set`, `setInstant`,
+`transition`, `themeTransition` and `span`. Every string argument is capped,
+control-character-rejected, and required to be an absolute path or `file://`
+URL (`span` is further restricted to `on|off|toggle|true|false|1|0|""` and
+capped at 32 bytes). `themeTransition`'s two base64 payloads are capped at
+~96 KiB decoded before they reach the theme loader.
 
 ## Issues
 

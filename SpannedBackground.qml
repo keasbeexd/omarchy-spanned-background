@@ -31,6 +31,25 @@ Item {
   readonly property string stateHome: home + "/.local/state"
   readonly property string currentBackgroundLink: stateHome + "/omarchy/current/background"
 
+  // Absolute filesystem path of the directory this QML file lives in, so every
+  // bundled helper is invoked by a fully-qualified path rather than a name
+  // resolved through the caller's PATH. `Qt.resolvedUrl(".")` gives a file://
+  // URL; strip the scheme and the trailing slash.
+  readonly property string pluginDir: {
+    var s = Qt.resolvedUrl(".").toString()
+    if (s.substring(0, 7) === "file://") s = s.substring(7)
+    if (s.length > 0 && s.charAt(s.length - 1) === "/") s = s.substring(0, s.length - 1)
+    return s
+  }
+  readonly property string helperBin: pluginDir + "/bin"
+
+  // Hard caps on strings that arrive via IPC. A wallpaper path is bounded by
+  // PATH_MAX and no legitimate theme payload is anywhere near this size; a
+  // caller that exceeds either gets their call refused rather than the shell
+  // process allocating a large string on their behalf.
+  readonly property int maxPathBytes: 4096
+  readonly property int maxThemePayloadBytes: 131072   // ~96 KiB decoded
+
   property string currentBackground: ""
   property string displayedBackground: ""
   property string incomingBackground: ""
@@ -60,6 +79,37 @@ Item {
 
   function isNum(v) {
     return typeof v === "number" && isFinite(v)
+  }
+
+  // Path arriving via IPC or via helper stdout. Legitimate wallpaper paths are
+  // short absolute filesystem paths or `file://` URLs; anything else -- an
+  // http(s)/data/qrc URL, a relative path, embedded control characters, or a
+  // string too long to be a real path -- would let a same-UID caller steer
+  // Image.source through Qt's URL layer to fetch remote content, decode a
+  // hostile SVG, or block on a FIFO. Reject rather than sanitise.
+  function normalisePath(p) {
+    if (typeof p !== "string") return ""
+    var s = p
+    // Trim ASCII whitespace only; do not touch the interior.
+    while (s.length > 0 && (s.charAt(0) === " " || s.charAt(0) === "\t" || s.charAt(0) === "\n" || s.charAt(0) === "\r")) s = s.substring(1)
+    while (s.length > 0) {
+      var c = s.charAt(s.length - 1)
+      if (c !== " " && c !== "\t" && c !== "\n" && c !== "\r") break
+      s = s.substring(0, s.length - 1)
+    }
+    if (s.length === 0 || s.length > maxPathBytes) return ""
+    for (var i = 0; i < s.length; i++) {
+      var code = s.charCodeAt(i)
+      if (code < 0x20 || code === 0x7f) return ""
+    }
+    var body = s
+    if (s.substring(0, 7) === "file://") body = s.substring(7)
+    else if (s.charAt(0) !== "/") return ""
+    // Absolute paths only. Do not attempt to canonicalise here; the caller
+    // will hand this off to Image.source, which will treat the string as a
+    // filesystem path and fail closed on anything the FS refuses.
+    if (body.length === 0 || body.charAt(0) !== "/") return ""
+    return s
   }
 
   function recomputeGeometry() {
@@ -104,19 +154,28 @@ Item {
   }
 
   function refreshBackground() {
-    if (!readlinkProc.running) readlinkProc.running = true
+    if (!resolveBgProc.running) {
+      resolveBgProc.buffer = ""
+      resolveBgProc.overflow = false
+      resolveBgProc.running = true
+    }
   }
 
   function setBackground(path, instant) {
-    transitionBackground("", path, path, instant, false)
+    var clean = normalisePath(path)
+    if (!clean) return
+    transitionBackground("", clean, clean, instant, false)
   }
 
   function transitionBackground(fromPath, path, finalPath, instant, force) {
-    path = String(path || "").trim()
-    finalPath = String(finalPath || path).trim()
-    fromPath = String(fromPath || "").trim()
-    if (!path || (!force && finalPath === currentBackground)) return
-    currentBackground = finalPath
+    var cleanPath = normalisePath(path)
+    if (!cleanPath) return
+    var cleanFinal = finalPath ? normalisePath(finalPath) : cleanPath
+    if (!cleanFinal) cleanFinal = cleanPath
+    var cleanFrom = normalisePath(fromPath) // may be empty; that is fine
+
+    if (!force && cleanFinal === currentBackground) return
+    currentBackground = cleanFinal
     backgroundVersion += 1
     revealStartedVersion = -1
 
@@ -126,19 +185,35 @@ Item {
     if (instant || !displayedBackground) {
       oldBackground = ""
       incomingBackground = ""
-      displayedBackground = path
+      displayedBackground = cleanPath
       revealProgress = 1
       return
     }
 
-    oldBackground = fromPath || displayedBackground
-    incomingBackground = path
+    oldBackground = cleanFrom || displayedBackground
+    incomingBackground = cleanPath
     revealProgress = 0
   }
 
   function setPendingTheme(colorsB64, shellB64) {
-    pendingColorsRaw = Util.decodeBase64(colorsB64)
-    pendingShellRaw = Util.decodeBase64(shellB64)
+    var colorsIn = (typeof colorsB64 === "string") ? colorsB64 : ""
+    var shellIn = (typeof shellB64 === "string") ? shellB64 : ""
+    // Cap the encoded size before decoding to bound the decoded string too.
+    // Base64 is ~4/3 the size of the raw payload; 4 * ceil(N/3) covers rounding.
+    var maxEncoded = 4 * (Math.floor(maxThemePayloadBytes / 3) + 1)
+    if (colorsIn.length > maxEncoded || shellIn.length > maxEncoded) {
+      console.warn("spanned-background: theme payload rejected (over " + maxThemePayloadBytes + " bytes)")
+      return
+    }
+    var colors = Util.decodeBase64(colorsIn)
+    var shell = Util.decodeBase64(shellIn)
+    if ((typeof colors === "string" && colors.length > maxThemePayloadBytes) ||
+        (typeof shell === "string" && shell.length > maxThemePayloadBytes)) {
+      console.warn("spanned-background: theme payload rejected after decode")
+      return
+    }
+    pendingColorsRaw = colors
+    pendingShellRaw = shell
     pendingThemeVersion = backgroundVersion
     pendingThemeFallbackTimer.restart()
   }
@@ -180,49 +255,159 @@ Item {
   }
 
   function openSelector() {
-    if (!bgSwitchProc.running) bgSwitchProc.running = true
+    if (!pickBgProc.running) pickBgProc.running = true
   }
 
   function openThemeSwitcher() {
-    if (!themeSwitchProc.running) themeSwitchProc.running = true
+    if (!pickThemeProc.running) pickThemeProc.running = true
+  }
+
+  // ---------------------------------------------------------------------
+  // Every child process routes through a bundled bash helper in ./bin, each
+  // invoked by absolute path. The helpers cap their own output at the
+  // producer, run under `setsid -w` with a `timeout -k` deadline, and refuse
+  // to touch symlinks or FIFOs on the file paths they read and write. The
+  // per-Process pieces below add QML-side deadlines and Component.onDestruction
+  // teardown as belt-and-braces: `Process.signal()` reaches only the wrapper,
+  // but our helpers use `setsid -w` so the deadline propagates.
+  // ---------------------------------------------------------------------
+
+  Process {
+    id: pickBgProc
+    command: [root.helperBin + "/pick-bg"]
+    // The picker draws its own UI, so inheriting DISPLAY / WAYLAND_DISPLAY /
+    // DBUS_SESSION_BUS_ADDRESS is required. The helper resets PATH before it
+    // resolves omarchy-theme-bg-switcher / -bg-set.
+    onExited: {
+      pickBgWatchdog.stop()
+      root.refreshBackground()
+    }
+    onRunningChanged: {
+      if (running) pickBgWatchdog.restart()
+      else pickBgWatchdog.stop()
+    }
   }
 
   Process {
-    id: bgSwitchProc
-    command: ["bash", "-c", "background=$(omarchy-theme-bg-switcher); [[ -n $background ]] && omarchy-theme-bg-set \"$background\""]
-    onExited: root.refreshBackground()
+    id: pickThemeProc
+    command: [root.helperBin + "/pick-theme"]
+    onExited: {
+      pickThemeWatchdog.stop()
+      root.refreshBackground()
+    }
+    onRunningChanged: {
+      if (running) pickThemeWatchdog.restart()
+      else pickThemeWatchdog.stop()
+    }
   }
 
   Process {
-    id: themeSwitchProc
-    command: ["bash", "-c", "theme=$(omarchy-theme-switcher); [[ -n $theme ]] && omarchy-theme-set \"$theme\" >/dev/null 2>&1 &"]
-    onExited: root.refreshBackground()
-  }
+    id: resolveBgProc
+    command: [root.helperBin + "/resolve-bg"]
 
-  Process {
-    id: readlinkProc
-    command: ["readlink", "-f", root.currentBackgroundLink]
-    stdout: StdioCollector {
-      onStreamFinished: root.setBackground(String(text || "").trim(), false)
+    // The helper caps its own output at 4096 bytes and prints nothing on
+    // rejection, but we still count bytes per chunk here so a helper somehow
+    // induced to emit more (a bug in the helper, a filesystem oddity) can
+    // never balloon the shell process. SplitParser with an empty split marker
+    // hands raw chunks straight to onRead; we cap at the byte level and abort
+    // the process on overflow instead of buffering.
+    property string buffer: ""
+    property bool overflow: false
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        if (resolveBgProc.overflow) return
+        if (resolveBgProc.buffer.length + chunk.length > root.maxPathBytes) {
+          resolveBgProc.overflow = true
+          resolveBgProc.buffer = ""
+          resolveBgProc.signal(15)
+          resolveBgKillTimer.restart()
+          return
+        }
+        resolveBgProc.buffer += chunk
+      }
+    }
+    onExited: {
+      resolveBgWatchdog.stop()
+      resolveBgKillTimer.stop()
+      var payload = resolveBgProc.buffer
+      resolveBgProc.buffer = ""
+      if (resolveBgProc.overflow) {
+        resolveBgProc.overflow = false
+        return
+      }
+      root.setBackground(payload, false)
+    }
+    onRunningChanged: {
+      if (running) resolveBgWatchdog.restart()
+      else resolveBgWatchdog.stop()
     }
   }
 
   Process {
     id: spanReadProc
-    command: ["bash", "-c", "grep -m1 '^span=' \"$HOME/.config/omarchy/spanned-background.conf\" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]'"]
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var v = String(text || "").trim().toLowerCase()
-        if (v === "off" || v === "false" || v === "0" || v === "no") root.applySpan(false, false)
-        else if (v === "on" || v === "true" || v === "1" || v === "yes") root.applySpan(true, false)
+    command: [root.helperBin + "/read-conf"]
+
+    property string buffer: ""
+    property bool overflow: false
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        if (spanReadProc.overflow) return
+        if (spanReadProc.buffer.length + chunk.length > 128) {
+          spanReadProc.overflow = true
+          spanReadProc.buffer = ""
+          spanReadProc.signal(15)
+          spanReadKillTimer.restart()
+          return
+        }
+        spanReadProc.buffer += chunk
       }
+    }
+    onExited: {
+      spanReadWatchdog.stop()
+      spanReadKillTimer.stop()
+      var v = spanReadProc.buffer.replace(/[\r\n\t ]+/g, "").toLowerCase()
+      spanReadProc.buffer = ""
+      if (spanReadProc.overflow) {
+        spanReadProc.overflow = false
+        return
+      }
+      if (v === "off") root.applySpan(false, false)
+      else if (v === "on") root.applySpan(true, false)
+    }
+    onRunningChanged: {
+      if (running) spanReadWatchdog.restart()
+      else spanReadWatchdog.stop()
     }
   }
 
   Process {
     id: spanWriteProc
-    command: ["bash", "-c", "mkdir -p \"$HOME/.config/omarchy\" && printf 'span=%s\\n' \"$1\" > \"$HOME/.config/omarchy/spanned-background.conf\"", "spanned-background", root.spanEnabled ? "on" : "off"]
+    // Argv-only: the on/off value is a separate element, not spliced into a
+    // shell string, and the helper validates it against a closed allowlist
+    // before it touches the filesystem.
+    command: [root.helperBin + "/write-conf", root.spanEnabled ? "on" : "off"]
+    onExited: spanWriteWatchdog.stop()
+    onRunningChanged: {
+      if (running) spanWriteWatchdog.restart()
+      else spanWriteWatchdog.stop()
+    }
   }
+
+  // Watchdogs: each Process has an outer QML deadline that TERM/KILL-escalates
+  // the wrapper if the in-helper `timeout` somehow fails to fire. The helpers
+  // use `setsid -w`, so signalling the wrapper unwinds the whole subtree.
+  Timer { id: pickBgWatchdog;      interval: 90000; repeat: false; onTriggered: if (pickBgProc.running)    { pickBgProc.signal(15);    pickBgKillTimer.restart() } }
+  Timer { id: pickBgKillTimer;     interval: 2000;  repeat: false; onTriggered: if (pickBgProc.running)    pickBgProc.signal(9) }
+  Timer { id: pickThemeWatchdog;   interval: 90000; repeat: false; onTriggered: if (pickThemeProc.running) { pickThemeProc.signal(15); pickThemeKillTimer.restart() } }
+  Timer { id: pickThemeKillTimer;  interval: 2000;  repeat: false; onTriggered: if (pickThemeProc.running) pickThemeProc.signal(9) }
+  Timer { id: resolveBgWatchdog;   interval: 10000; repeat: false; onTriggered: if (resolveBgProc.running) { resolveBgProc.signal(15); resolveBgKillTimer.restart() } }
+  Timer { id: resolveBgKillTimer;  interval: 2000;  repeat: false; onTriggered: if (resolveBgProc.running) resolveBgProc.signal(9) }
+  Timer { id: spanReadWatchdog;    interval: 5000;  repeat: false; onTriggered: if (spanReadProc.running)  { spanReadProc.signal(15);  spanReadKillTimer.restart() } }
+  Timer { id: spanReadKillTimer;   interval: 2000;  repeat: false; onTriggered: if (spanReadProc.running)  spanReadProc.signal(9) }
+  Timer { id: spanWriteWatchdog;   interval: 5000;  repeat: false; onTriggered: if (spanWriteProc.running) { spanWriteProc.signal(15); spanWriteKillTimer.restart() } }
+  Timer { id: spanWriteKillTimer;  interval: 2000;  repeat: false; onTriggered: if (spanWriteProc.running) spanWriteProc.signal(9) }
 
   IpcHandler {
     target: "background"
@@ -251,11 +436,16 @@ Item {
     // Anything else is refused rather than guessed at -- a mistyped "on" must
     // not silently turn spanning off.
     function span(mode: string): void {
-      var m = String(mode || "").trim().toLowerCase()
+      var raw = (typeof mode === "string") ? mode : ""
+      if (raw.length > 32) {
+        console.warn("spanned-background: span mode too long")
+        return
+      }
+      var m = raw.replace(/[\r\n\t ]+/g, "").toLowerCase()
       if (m === "on" || m === "true" || m === "1") root.applySpan(true, true)
       else if (m === "off" || m === "false" || m === "0") root.applySpan(false, true)
       else if (m === "toggle" || m === "") root.applySpan(!root.spanEnabled, true)
-      else console.warn("spanned-background: unknown span mode '" + mode + "' (expected on, off or toggle)")
+      else console.warn("spanned-background: unknown span mode (expected on, off or toggle)")
     }
   }
 
@@ -316,6 +506,16 @@ Item {
     recomputeGeometry()
     spanReadProc.running = true
     refreshBackground()
+  }
+
+  // Tear down every helper we spawned when this service is torn down. Sends
+  // SIGTERM to the wrapper; because the helpers run under `setsid -w`, the
+  // signal cascades to the actual command they exec'd.
+  Component.onDestruction: {
+    var procs = [pickBgProc, pickThemeProc, resolveBgProc, spanReadProc, spanWriteProc]
+    for (var i = 0; i < procs.length; i++) {
+      if (procs[i].running) procs[i].signal(15)
+    }
   }
 
   Variants {
