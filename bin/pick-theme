@@ -29,7 +29,7 @@ esac
 sel="${sel%$'\n'}"
 [ -n "$sel" ] || exit 0
 case "$sel" in
-  *[$'\x00'-$'\x1f'$'\x7f']*)
+  *[[:cntrl:]]*)
     echo "spanned-background/pick-theme: picker output rejected (control character)" >&2
     exit 1 ;;
 esac
