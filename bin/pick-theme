@@ -1,0 +1,41 @@
+#!/usr/bin/bash
+# Run the omarchy theme picker under a deadline in its own session, then hand
+# the choice to omarchy-theme-set. Same shape as pick-bg; see that helper for
+# the rationale.
+
+set -uo pipefail
+umask 077
+
+MAX=4096
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+sel=$(/usr/bin/setsid -w /usr/bin/timeout -k 2 60 \
+        omarchy-theme-switcher 2>/dev/null \
+        | /usr/bin/head -c $((MAX + 1)))
+rc=$?
+
+if [ "${#sel}" -gt "$MAX" ]; then
+  echo "spanned-background/pick-theme: picker output exceeded ${MAX} bytes" >&2
+  exit 1
+fi
+
+case "$rc" in
+  0) : ;;
+  124|130) exit 0 ;;
+  *) exit "$rc" ;;
+esac
+
+sel="${sel%$'\n'}"
+[ -n "$sel" ] || exit 0
+case "$sel" in
+  *[$'\x00'-$'\x1f'$'\x7f']*)
+    echo "spanned-background/pick-theme: picker output rejected (control character)" >&2
+    exit 1 ;;
+esac
+
+# omarchy-theme-set is deliberately fire-and-forget: setting a theme swaps
+# many components and re-emits our own IPC. `setsid` still holds so we can
+# escalate to SIGKILL from the wrapper if the setter itself hangs.
+exec /usr/bin/setsid -w /usr/bin/timeout -k 2 30 \
+  omarchy-theme-set -- "$sel"
