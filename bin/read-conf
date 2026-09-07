@@ -1,0 +1,47 @@
+#!/usr/bin/bash
+# Bounded, symlink-hostile read of ~/.config/omarchy/spanned-background.conf.
+#
+# The QML layer calls this by absolute path and consumes stdout only, so output
+# is deliberately tiny: literal `on`, literal `off`, or nothing. Anything the
+# file says beyond that is discarded. Failures are silent (exit 0 with no
+# stdout) so a broken or missing config leaves the plugin at its compiled-in
+# default rather than fighting the shell with an error state.
+
+set -u
+umask 077
+: "${HOME:?HOME is not set}"
+
+dir="$HOME/.config/omarchy"
+file="$dir/spanned-background.conf"
+
+# Refuse rather than repair: a state directory that is a symlink or owned by
+# someone else is not ours. `-L` catches a symlink, `-d` still true on a
+# symlink-to-dir so both checks are required.
+if [ ! -e "$dir" ] || [ -L "$dir" ] || [ ! -d "$dir" ]; then
+  exit 0
+fi
+if [ "$(/usr/bin/stat -Lc %u -- "$dir" 2>/dev/null)" != "$(/usr/bin/id -u)" ]; then
+  exit 0
+fi
+
+# dd with iflag=nofollow rejects a symlink at the final component and
+# iflag=nonblock rejects a FIFO planted at the same name (open would otherwise
+# block the shell forever). count_bytes bounds the read at the producer, not
+# after the bytes are already in memory.
+raw=$(/usr/bin/dd if="$file" \
+        iflag=nofollow,nonblock,count_bytes,fullblock \
+        bs=1 count=129 status=none 2>/dev/null) || exit 0
+[ "${#raw}" -le 128 ] || exit 0
+[ -n "$raw" ] || exit 0
+
+# Take only the first `span=<word>` occurrence; strict allowlist on the value.
+value=$(printf '%s\n' "$raw" \
+          | /usr/bin/grep -m1 '^span=' \
+          | /usr/bin/cut -d= -f2 \
+          | /usr/bin/tr -d '[:space:]')
+
+case "$value" in
+  on|true|1|yes)  printf 'on\n' ;;
+  off|false|0|no) printf 'off\n' ;;
+  *) : ;;
+esac

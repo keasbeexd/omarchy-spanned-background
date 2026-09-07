@@ -1,0 +1,61 @@
+#!/usr/bin/bash
+# Run the omarchy background picker under a deadline in its own session, then
+# hand the chosen path to omarchy-theme-bg-set. This is the same pair of
+# commands the stock plugin invokes on a desktop double-click; wrapping them
+# here gives us:
+#
+#   * an absolute deadline (`timeout -k`) so a hung picker cannot pin the
+#     Quickshell process,
+#   * a producer-side byte cap on the picker's output,
+#   * strict validation of the returned path before it becomes an argv element
+#     of the setter,
+#   * `setsid -w` so signalling this wrapper propagates to the picker.
+
+set -uo pipefail
+umask 077
+
+MAX=4096
+
+# We deliberately let the picker inherit our environment (it draws UI and
+# needs DISPLAY / WAYLAND_DISPLAY / DBUS_SESSION_BUS_ADDRESS). PATH is
+# reset to the standard system search paths so a hostile prepend cannot
+# shadow the omarchy tools during the call.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+sel=$(/usr/bin/setsid -w /usr/bin/timeout -k 2 60 \
+        omarchy-theme-bg-switcher 2>/dev/null \
+        | /usr/bin/head -c $((MAX + 1)))
+rc=$?
+
+# `set -o pipefail` makes rc the first non-zero status in the pipeline, so a
+# picker that died from SIGPIPE after emitting > MAX bytes is caught by the
+# length check first (below) rather than being reported as success.
+if [ "${#sel}" -gt "$MAX" ]; then
+  echo "spanned-background/pick-bg: picker output exceeded ${MAX} bytes" >&2
+  exit 1
+fi
+
+# rc 124 => the picker was killed by the deadline; rc 130 => the user hit
+# ^C on the picker; neither is an error worth reporting to the shell log.
+case "$rc" in
+  0) : ;;
+  124|130) exit 0 ;;
+  *) exit "$rc" ;;
+esac
+
+# Trim exactly one trailing newline (the picker prints one), then reject
+# anything that still contains a control character. That leaves paths that
+# look like paths and rejects paths that look like shell strings.
+sel="${sel%$'\n'}"
+[ -n "$sel" ] || exit 0
+case "$sel" in
+  *[$'\x00'-$'\x1f'$'\x7f']*)
+    echo "spanned-background/pick-bg: picker output rejected (control character)" >&2
+    exit 1 ;;
+esac
+
+# omarchy-theme-bg-set takes the path as its single positional argument.
+# The `--` separator prevents a leading `-` from being read as an option
+# even though we already rejected that shape upstream.
+exec /usr/bin/setsid -w /usr/bin/timeout -k 2 30 \
+  omarchy-theme-bg-set -- "$sel"
