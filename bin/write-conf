@@ -1,0 +1,53 @@
+#!/usr/bin/bash
+# Atomic write of the span=on/off state to ~/.config/omarchy/spanned-background.conf.
+#
+# The plain `> "$path"` redirect the plugin used before this helper followed a
+# planted symlink at the destination and truncated whatever it pointed at. This
+# creates an unpredictable temporary in the destination directory at mode 0600
+# from the first byte, then renames onto the destination -- rename(2) replaces
+# a symlink at the destination rather than writing through it.
+#
+# The state value comes in as argv[1] and is validated against a closed set
+# before it goes anywhere near the filesystem.
+
+set -u
+umask 077
+: "${HOME:?HOME is not set}"
+
+value="${1:-}"
+case "$value" in
+  on|off) ;;
+  *) echo "spanned-background/write-conf: value must be on|off" >&2; exit 2 ;;
+esac
+
+dir="$HOME/.config/omarchy"
+file="$dir/spanned-background.conf"
+
+# `mkdir -p -m 700` only applies the mode to newly-created components, so it
+# never widens an existing directory. We do not repair here: an existing
+# directory that is a symlink or not ours is refused.
+/usr/bin/mkdir -p -m 700 -- "$dir" 2>/dev/null || {
+  echo "spanned-background/write-conf: cannot create $dir" >&2
+  exit 1
+}
+if [ -L "$dir" ] || [ ! -d "$dir" ]; then
+  echo "spanned-background/write-conf: refusing: $dir is not a real directory" >&2
+  exit 1
+fi
+if [ "$(/usr/bin/stat -Lc %u -- "$dir" 2>/dev/null)" != "$(/usr/bin/id -u)" ]; then
+  echo "spanned-background/write-conf: refusing: $dir is not owned by us" >&2
+  exit 1
+fi
+
+tmp=$(/usr/bin/mktemp -p "$dir" ".spanned-background.XXXXXXXXXX") || exit 1
+trap 'rm -f -- "$tmp"' EXIT
+/usr/bin/chmod 600 -- "$tmp" || exit 1
+
+# The temp file is freshly ours: this is the one redirect in the plugin that is
+# safe, because $tmp is a name mkstemp(3) just chose.
+printf 'span=%s\n' "$value" > "$tmp" || exit 1
+
+# `-T` treats the destination as a file, never as a directory to descend into;
+# `-f` skips the interactive prompt if permissions are odd.
+/usr/bin/mv -f -T -- "$tmp" "$file" || exit 1
+trap - EXIT
