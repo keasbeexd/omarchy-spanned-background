@@ -5,9 +5,11 @@
 # The link is expected: omarchy maintains it and updates the target on every
 # wallpaper change. `readlink -f` follows the whole chain, which is what we
 # want here. The output is capped at 4096 bytes and the resolved target is
-# validated as a regular file the current user owns before it is printed.
-# Anything else prints nothing (exit 0) so the caller keeps its last known
-# good value rather than assigning something bogus to Image.source.
+# validated as a regular file owned by the current user or root (stock omarchy
+# themes install to /usr/share/omarchy/themes/, so their wallpapers are
+# root-owned) before it is printed. Anything else prints nothing (exit 0) so
+# the caller keeps its last known good value rather than assigning something
+# bogus to Image.source.
 
 set -u
 : "${HOME:?HOME is not set}"
@@ -29,9 +31,13 @@ case "$path" in
 esac
 
 # Reject control characters; a real filename does not contain them and they
-# would confuse both the URL layer and any downstream logs.
+# would confuse both the URL layer and any downstream logs. `[[:cntrl:]]` is
+# used deliberately: `[$'\x00'-$'\x1f'$'\x7f']` collapses to a literal `-`
+# because bash truncates strings at NUL, so any path with a hyphen (which is
+# most of them, including every stock omarchy theme wallpaper) was falsely
+# rejected -- leaving the desktop black on every shell restart.
 case "$path" in
-  *[$'\x00'-$'\x1f'$'\x7f']*) exit 0 ;;
+  *[[:cntrl:]]*) exit 0 ;;
 esac
 
 # `readlink -f` already resolved, so a lingering `-L` here means the target
@@ -39,7 +45,17 @@ esac
 # path is canonical so it just asserts "regular file".
 if [ -L "$path" ]; then exit 0; fi
 if [ ! -f "$path" ]; then exit 0; fi
-if [ "$(/usr/bin/stat -Lc %u -- "$path" 2>/dev/null)" != "$(/usr/bin/id -u)" ]; then
+# Accept the current user OR root as the owner. Stock omarchy themes install
+# to /usr/share/omarchy/themes/<name>/backgrounds/ (root-owned), and the
+# ~/.local/state/omarchy/current/background symlink points straight at those
+# files. Requiring current-user ownership left the desktop black after
+# `omarchy update` and after `omarchy-shell` restart -- the picker still
+# worked because omarchy-theme-bg-set drives the update via IPC, not via this
+# helper. Root-owned files remain safe: only root can write them, so another
+# regular user cannot plant one.
+owner=$(/usr/bin/stat -Lc %u -- "$path" 2>/dev/null)
+uid=$(/usr/bin/id -u)
+if [ -z "$owner" ] || { [ "$owner" != "$uid" ] && [ "$owner" != "0" ]; }; then
   exit 0
 fi
 
