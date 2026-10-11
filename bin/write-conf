@@ -40,14 +40,19 @@ if [ "$(/usr/bin/stat -Lc %u -- "$dir" 2>/dev/null)" != "$(/usr/bin/id -u)" ]; t
 fi
 
 tmp=$(/usr/bin/mktemp -p "$dir" ".spanned-background.XXXXXXXXXX") || exit 1
-trap 'rm -f -- "$tmp"' EXIT
+trap '/usr/bin/rm -f -- "$tmp"' EXIT
 /usr/bin/chmod 600 -- "$tmp" || exit 1
 
 # The temp file is freshly ours: this is the one redirect in the plugin that is
 # safe, because $tmp is a name mkstemp(3) just chose.
 printf 'span=%s\n' "$value" > "$tmp" || exit 1
+# fsync the contents before the rename publishes them, so a crash cannot leave
+# an empty file under the real name.
+/usr/bin/sync -- "$tmp" || exit 1
 
 # `-T` treats the destination as a file, never as a directory to descend into;
 # `-f` skips the interactive prompt if permissions are odd.
 /usr/bin/mv -f -T -- "$tmp" "$file" || exit 1
 trap - EXIT
+# ...and fsync the directory so the rename itself is durable.
+/usr/bin/sync -- "$dir" || exit 1

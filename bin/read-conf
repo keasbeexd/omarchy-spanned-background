@@ -11,6 +11,9 @@ set -u
 umask 077
 : "${HOME:?HOME is not set}"
 
+# Byte length, not character length; see bin/pick-bg.
+bytelen() { local LC_ALL=C; printf '%s' "${#1}"; }
+
 dir="$HOME/.config/omarchy"
 file="$dir/spanned-background.conf"
 
@@ -31,7 +34,7 @@ fi
 raw=$(/usr/bin/dd if="$file" \
         iflag=nofollow,nonblock,count_bytes,fullblock \
         bs=1 count=129 status=none 2>/dev/null) || exit 0
-[ "${#raw}" -le 128 ] || exit 0
+[ "$(bytelen "$raw")" -le 128 ] || exit 0
 [ -n "$raw" ] || exit 0
 
 # Take only the first `span=<word>` occurrence; strict allowlist on the value.
