@@ -48,7 +48,7 @@ Item {
   // caller that exceeds either gets their call refused rather than the shell
   // process allocating a large string on their behalf.
   readonly property int maxPathBytes: 4096
-  readonly property int maxThemePayloadBytes: 131072   // ~96 KiB decoded
+  readonly property int maxThemePayloadBytes: 131072   // 128 KiB per decoded payload
 
   property string currentBackground: ""
   property string displayedBackground: ""
@@ -100,7 +100,7 @@ Item {
     if (s.length === 0 || s.length > maxPathBytes) return ""
     for (var i = 0; i < s.length; i++) {
       var code = s.charCodeAt(i)
-      if (code < 0x20 || code === 0x7f) return ""
+      if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) return ""
     }
     var body = s
     if (s.substring(0, 7) === "file://") body = s.substring(7)
@@ -265,11 +265,17 @@ Item {
   // ---------------------------------------------------------------------
   // Every child process routes through a bundled bash helper in ./bin, each
   // invoked by absolute path. The helpers cap their own output at the
-  // producer, run under `setsid -w` with a `timeout -k` deadline, and refuse
-  // to touch symlinks or FIFOs on the file paths they read and write. The
+  // producer and refuse to touch symlinks or FIFOs on the file paths they
+  // read and write. The two picker helpers, the only ones that start
+  // long-running children, run them under `timeout -k`, which puts them in
+  // their own process group and forwards a TERM to that whole group; the
+  // helper forwards its own TERM to `timeout`. So `Process.signal(15)`, which
+  // reaches only the helper, still tears down the picker's subtree. The
   // per-Process pieces below add QML-side deadlines and Component.onDestruction
-  // teardown as belt-and-braces: `Process.signal()` reaches only the wrapper,
-  // but our helpers use `setsid -w` so the deadline propagates.
+  // teardown on top of that.
+  //
+  // The three file helpers only need HOME, so they run with a cleared
+  // environment: nothing like BASH_ENV or a prepended PATH rides in.
   // ---------------------------------------------------------------------
 
   Process {
@@ -304,6 +310,8 @@ Item {
   Process {
     id: resolveBgProc
     command: [root.helperBin + "/resolve-bg"]
+    clearEnvironment: true
+    environment: ({ "HOME": root.home, "PATH": "/usr/bin" })
 
     // The helper caps its own output at 4096 bytes and prints nothing on
     // rejection, but we still count bytes per chunk here so a helper somehow
@@ -347,6 +355,8 @@ Item {
   Process {
     id: spanReadProc
     command: [root.helperBin + "/read-conf"]
+    clearEnvironment: true
+    environment: ({ "HOME": root.home, "PATH": "/usr/bin" })
 
     property string buffer: ""
     property bool overflow: false
@@ -388,6 +398,8 @@ Item {
     // shell string, and the helper validates it against a closed allowlist
     // before it touches the filesystem.
     command: [root.helperBin + "/write-conf", root.spanEnabled ? "on" : "off"]
+    clearEnvironment: true
+    environment: ({ "HOME": root.home, "PATH": "/usr/bin" })
     onExited: spanWriteWatchdog.stop()
     onRunningChanged: {
       if (running) spanWriteWatchdog.restart()
@@ -396,8 +408,8 @@ Item {
   }
 
   // Watchdogs: each Process has an outer QML deadline that TERM/KILL-escalates
-  // the wrapper if the in-helper `timeout` somehow fails to fire. The helpers
-  // use `setsid -w`, so signalling the wrapper unwinds the whole subtree.
+  // the wrapper if the in-helper `timeout` somehow fails to fire. A TERM to a
+  // picker helper is forwarded to its `timeout`, which unwinds the subtree.
   Timer { id: pickBgWatchdog;      interval: 90000; repeat: false; onTriggered: if (pickBgProc.running)    { pickBgProc.signal(15);    pickBgKillTimer.restart() } }
   Timer { id: pickBgKillTimer;     interval: 2000;  repeat: false; onTriggered: if (pickBgProc.running)    pickBgProc.signal(9) }
   Timer { id: pickThemeWatchdog;   interval: 90000; repeat: false; onTriggered: if (pickThemeProc.running) { pickThemeProc.signal(15); pickThemeKillTimer.restart() } }
@@ -509,8 +521,8 @@ Item {
   }
 
   // Tear down every helper we spawned when this service is torn down. Sends
-  // SIGTERM to the wrapper; because the helpers run under `setsid -w`, the
-  // signal cascades to the actual command they exec'd.
+  // SIGTERM to the wrapper; the picker helpers forward it to `timeout`, which
+  // signals the picker's whole process group.
   Component.onDestruction: {
     var procs = [pickBgProc, pickThemeProc, resolveBgProc, spanReadProc, spanWriteProc]
     for (var i = 0; i < procs.length; i++) {

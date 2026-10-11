@@ -11,8 +11,11 @@
 # the caller keeps its last known good value rather than assigning something
 # bogus to Image.source.
 
-set -u
+set -uo pipefail
 : "${HOME:?HOME is not set}"
+
+# Byte length, not character length; see bin/pick-bg.
+bytelen() { local LC_ALL=C; printf '%s' "${#1}"; }
 
 link="$HOME/.local/state/omarchy/current/background"
 
@@ -21,7 +24,7 @@ link="$HOME/.local/state/omarchy/current/background"
 # check below rejects the whole result.
 path=$(/usr/bin/readlink -f -- "$link" 2>/dev/null \
          | /usr/bin/head -c 4097) || exit 0
-[ "${#path}" -le 4096 ] || exit 0
+[ "$(bytelen "$path")" -le 4096 ] || exit 0
 [ -n "$path" ] || exit 0
 
 # Must be an absolute path; no scheme URLs, no relative paths.

@@ -89,6 +89,9 @@ It does **not** touch:
 
 - `~/.config/omarchy/spanned-background.conf` — the one-line file holding
   `span=on` or `span=off`. Delete it manually if you want no trace.
+- In the unlikely case the shell was killed in the middle of saving that file,
+  a stray `~/.config/omarchy/.spanned-background.XXXXXXXXXX` temporary (same
+  one-line content) can remain next to it. It is safe to delete.
 
 Nothing else is left behind: no daemons, no systemd units, no udev rules, no
 `sudoers` entries, no polkit actions, no cache directory, no state directory,
@@ -150,24 +153,31 @@ separate argv elements.
 - **Reads**, via `bin/resolve-bg`, the symlink Omarchy maintains at
   `~/.local/state/omarchy/current/background`. The helper caps `readlink`
   output at 4096 bytes, refuses anything that is not a regular file owned by
-  the current user, and rejects paths with control characters before the
-  result reaches the wallpaper renderer.
+  the current user or by root (stock theme wallpapers live under
+  `/usr/share/omarchy/themes/`), and rejects paths with control characters
+  before the result reaches the wallpaper renderer.
 - **Reads**, via `bin/read-conf`, `~/.config/omarchy/spanned-background.conf`
   using `dd iflag=nofollow,nonblock,count_bytes` at most 129 bytes at a time,
   so a symlink or FIFO planted at that name is refused rather than followed
   or blocked on.
 - **Writes**, via `bin/write-conf`, the same file. The write creates an
   unpredictable temporary via `mktemp` in the destination directory, chmods it
-  600, writes the payload, and `mv -f -T`s it over the destination — so a
-  planted symlink at the destination is *replaced* by `rename(2)` rather than
-  truncating whatever it pointed at. The value on argv is validated against
-  the closed set `{on, off}` before the helper touches the filesystem.
+  600, writes and fsyncs the payload, `mv -f -T`s it over the destination and
+  fsyncs the directory — so a planted symlink at the destination is
+  *replaced* by `rename(2)` rather than truncating whatever it pointed at.
+  The value on argv is validated against the closed set `{on, off}` before
+  the helper touches the filesystem.
 - **Runs**, only when you double-click the desktop, the same two commands the
   stock plugin runs: `omarchy-theme-bg-switcher` / `omarchy-theme-bg-set` and
-  `omarchy-theme-switcher` / `omarchy-theme-set`. Each pair runs under
-  `setsid -w timeout -k 2 60` in `bin/pick-bg` / `bin/pick-theme`, with a
-  4 KiB output cap and control-character rejection on the picker's output
-  before it becomes an argv element of the setter.
+  `omarchy-theme-switcher` / `omarchy-theme-set`. Each picker runs under
+  `timeout -k 2 60` (each setter under `timeout -k 2 30`) in `bin/pick-bg` /
+  `bin/pick-theme`, in its own process group; when the shell stops the
+  helper, the helper forwards the signal so the picker and everything it
+  started exits too. The picker's output is capped at 4 KiB (measured in
+  bytes) and control characters are rejected before it becomes an argv
+  element of the setter.
+- The three file helpers (`resolve-bg`, `read-conf`, `write-conf`) run with a
+  cleared environment holding only `HOME` and `PATH=/usr/bin`.
 - Reads the wallpaper image itself. Every path that reaches `Image.source`
   is either produced by a helper above or arrives via IPC and is put through
   the same absolute-path + control-char + length check.
@@ -178,8 +188,8 @@ The `background` IPC surface exposes `refresh`, `set`, `setInstant`,
 `transition`, `themeTransition` and `span`. Every string argument is capped,
 control-character-rejected, and required to be an absolute path or `file://`
 URL (`span` is further restricted to `on|off|toggle|true|false|1|0|""` and
-capped at 32 bytes). `themeTransition`'s two base64 payloads are capped at
-~96 KiB decoded before they reach the theme loader.
+capped at 32 bytes). `themeTransition`'s two base64 payloads are each capped
+at 128 KiB decoded before they reach the theme loader.
 
 ## Issues
 
