@@ -1,7 +1,6 @@
 #!/usr/bin/bash
-# Run the omarchy theme picker under a deadline in its own session, then hand
-# the choice to omarchy-theme-set. Same shape as pick-bg; see that helper for
-# the rationale.
+# Run the omarchy theme picker under a deadline, then hand the choice to
+# omarchy-theme-set. Same shape as pick-bg; see that helper for the rationale.
 
 set -uo pipefail
 umask 077
@@ -10,21 +9,27 @@ MAX=4096
 
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-sel=$(/usr/bin/setsid -w /usr/bin/timeout -k 2 60 \
-        omarchy-theme-switcher 2>/dev/null \
-        | /usr/bin/head -c $((MAX + 1)))
-rc=$?
+bytelen() { local LC_ALL=C; printf '%s' "${#1}"; }
 
-if [ "${#sel}" -gt "$MAX" ]; then
-  echo "spanned-background/pick-theme: picker output exceeded ${MAX} bytes" >&2
-  exit 1
-fi
+exec {out}< <(exec /usr/bin/timeout -k 2 60 omarchy-theme-switcher 2>/dev/null)
+picker=$!
+trap '/usr/bin/kill -TERM "$picker" 2>/dev/null; exit 143' TERM INT HUP
+wait "$picker"
+rc=$?
+trap - TERM INT HUP
 
 case "$rc" in
   0) : ;;
   124|130) exit 0 ;;
   *) exit "$rc" ;;
 esac
+
+sel=$(/usr/bin/head -c $((MAX + 1)) <&"$out")
+exec {out}<&-
+if [ "$(bytelen "$sel")" -gt "$MAX" ]; then
+  echo "spanned-background/pick-theme: picker output exceeded ${MAX} bytes" >&2
+  exit 1
+fi
 
 sel="${sel%$'\n'}"
 [ -n "$sel" ] || exit 0
@@ -34,8 +39,7 @@ case "$sel" in
     exit 1 ;;
 esac
 
-# omarchy-theme-set is deliberately fire-and-forget: setting a theme swaps
-# many components and re-emits our own IPC. `setsid` still holds so we can
-# escalate to SIGKILL from the wrapper if the setter itself hangs.
-exec /usr/bin/setsid -w /usr/bin/timeout -k 2 30 \
-  omarchy-theme-set -- "$sel"
+# omarchy-theme-set swaps many components and re-emits our own IPC. `exec`
+# makes `timeout` this process, so the shell's TERM reaches the setter's
+# whole process group.
+exec /usr/bin/timeout -k 2 30 omarchy-theme-set -- "$sel"
