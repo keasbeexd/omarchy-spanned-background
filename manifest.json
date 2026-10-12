@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "keasbeexd.spanned-background",
   "name": "Spanned Background",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Marc Ferro @keasbeexd",
   "description": "Draws one wallpaper stretched across every connected monitor, Windows 'Span' style. Drop-in replacement for the built-in omarchy.background service.",
   "license": "MIT",

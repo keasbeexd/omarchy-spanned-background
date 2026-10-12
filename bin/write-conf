@@ -39,9 +39,10 @@ if [ "$(/usr/bin/stat -Lc %u -- "$dir" 2>/dev/null)" != "$(/usr/bin/id -u)" ]; t
   exit 1
 fi
 
+# mktemp(1) creates the file with O_EXCL at mode 0600 from the first byte, so
+# there is no chmod-by-path window to close afterwards.
 tmp=$(/usr/bin/mktemp -p "$dir" ".spanned-background.XXXXXXXXXX") || exit 1
 trap '/usr/bin/rm -f -- "$tmp"' EXIT
-/usr/bin/chmod 600 -- "$tmp" || exit 1
 
 # The temp file is freshly ours: this is the one redirect in the plugin that is
 # safe, because $tmp is a name mkstemp(3) just chose.
