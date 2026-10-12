@@ -1,15 +1,17 @@
 # Spanned Background
 
-![One wallpaper drawn across three monitors, edge to edge.](preview.png)
+![Spanned Background: the stock service shows one copy of the wallpaper per monitor; this plugin draws one wallpaper across all of them.](preview.png)
 
 An [Omarchy](https://omarchy.org) **Quattro** shell plugin that treats all of
 your monitors as one continuous canvas and paints a single wallpaper across
-them — the equivalent of the Windows "Span" wallpaper fit. Edge to edge, no
-bezel compensation: the pixel at the right edge of your left monitor is the
-pixel immediately left of the one at the left edge of your right monitor.
+them, like the Windows "Span" wallpaper setting.
 
-It is a drop-in replacement for the built-in `omarchy.background` service, so
-everything else keeps working: `omarchy-theme-bg-set`, the `Super + Ctrl + Space`
+The image runs edge to edge with no bezel compensation: the last pixel on the
+right of one monitor is followed directly by the first pixel on the left of the
+next.
+
+It replaces the built-in `omarchy.background` service, and everything else
+keeps working as before: `omarchy-theme-bg-set`, the `Super + Ctrl + Space`
 background picker, theme switching with its diagonal wipe, and double-clicking
 the desktop.
 
@@ -17,8 +19,8 @@ the desktop.
 
 - Omarchy 4.x ("Quattro"). This plugin targets the Quickshell-based
   `omarchy-shell` and does **not** work on Omarchy 3 or earlier.
-- Two or more monitors, obviously. With a single monitor it behaves exactly like
-  the stock background service.
+- Two or more monitors to see any difference. With a single monitor it behaves
+  exactly like the stock background service.
 - No external packages. It uses only what Omarchy already ships.
 
 ## Install
@@ -28,7 +30,7 @@ omarchy plugin disable omarchy.background
 omarchy plugin add https://github.com/keasbeexd/omarchy-spanned-background --enable
 ```
 
-Or manually, without git:
+Or manually, from a downloaded copy of this repository:
 
 ```bash
 mkdir -p ~/.config/omarchy/plugins
@@ -38,21 +40,18 @@ omarchy plugin disable omarchy.background
 omarchy plugin enable keasbeexd.spanned-background
 ```
 
-Disable the built-in *first* in both cases: while the two are enabled together
-they fight over the same IPC target.
+> [!IMPORTANT]
+> **Disable `omarchy.background` first, in both cases.** Both plugins draw on
+> the Wayland background layer and both claim the `background` IPC target, so
+> running them together gives you two stacked wallpapers and an IPC conflict.
 
-If the wallpaper does not change immediately, ask the shell to rescan:
+If the wallpaper does not change straight away, ask the shell to rescan:
 
 ```bash
 omarchy-shell -q shell rescanPlugins
 ```
 
-…and if that does not pick it up, restart the shell or log out and back in.
-
-> [!IMPORTANT]
-> **Disabling `omarchy.background` is required, not optional.** Both plugins draw
-> on the Wayland background layer and both claim the `background` IPC target, so
-> running them together gives you two stacked wallpapers and an IPC conflict.
+If that does not pick it up, restart the shell or log out and back in.
 
 ## Using it
 
@@ -64,11 +63,11 @@ omarchy-shell -q background span on
 omarchy-shell -q background span toggle
 ```
 
-The choice is written to `~/.config/omarchy/spanned-background.conf` and read
-back when the shell starts. You can also change the `spanEnabled` default at the
-top of `SpannedBackground.qml`.
+The choice is saved to `~/.config/omarchy/spanned-background.conf` and read
+back when the shell starts. Without that file the plugin uses the
+`spanEnabled` default at the top of `SpannedBackground.qml`.
 
-Everything else is unchanged:
+The desktop shortcuts are the same as stock:
 
 | Action | Result |
 | --- | --- |
@@ -85,7 +84,7 @@ omarchy plugin remove keasbeexd.spanned-background     # if installed via git
 ```
 
 `omarchy plugin remove` deletes the plugin directory and all bundled scripts.
-It does **not** touch:
+It does **not** delete:
 
 - `~/.config/omarchy/spanned-background.conf` — the one-line file holding
   `span=on` or `span=off`. Delete it manually if you want no trace.
@@ -99,24 +98,27 @@ no keyring items, no packages installed, no shared configuration edited.
 
 ## How it works
 
-The stock background service creates one background-layer window per screen and
-fills each with `PreserveAspectCrop` — which is why every monitor gets its own
-full copy of the image.
+The stock background service creates one background-layer window per screen
+and fills each with `PreserveAspectCrop`, which is why every monitor gets its
+own full copy of the image.
 
-This plugin keeps the one-window-per-screen structure (that is how Wayland layer
-shells work) but changes what each window draws. On startup, and whenever a
-monitor is added, removed, moved, rotated or rescaled, it reads `x`, `y`, `width`
-and `height` from every `ShellScreen`, computes the bounding box of the whole
-virtual desktop, and sizes each window's image to *that* box, offset by the
-negative of its own screen origin. Each output therefore renders only its slice
-of one shared image, clipped to its own bounds. Every panel asks for the same
-image at the same size, so Qt's pixmap cache holds a single decode between them
-— the same memory profile as the stock plugin.
+This plugin keeps one window per screen (that is how Wayland layer shells work)
+but changes what each window draws:
 
-Because Hyprland lays every output out in a single logical coordinate space,
-this is automatically correct for mixed resolutions, mixed (including
-fractional) scale factors, portrait monitors and stacked arrangements — nothing
-is hardcoded about any particular setup.
+1. On startup, and whenever a monitor is added, removed, moved, rotated or
+   rescaled, it reads `x`, `y`, `width` and `height` from every `ShellScreen`.
+2. It computes the bounding box of the whole virtual desktop.
+3. It sizes each window's image to *that* box, shifted by the window's own
+   screen origin, and clips it to the screen.
+
+Each output therefore draws only its own slice of one shared image. Every
+window asks for the same image at the same size, so Qt's pixmap cache keeps a
+single decode for all of them: the same memory use as the stock plugin.
+
+Hyprland places every output in one logical coordinate space, so this works
+for mixed resolutions, mixed (including fractional) scale factors, portrait
+monitors and stacked arrangements without anything hardcoded for a particular
+setup.
 
 The theme-change wipe is computed in that same virtual space and then shifted
 into each output's local coordinates, so one diagonal sweeps continuously across
@@ -127,15 +129,16 @@ falls back to stock per-monitor rendering rather than drawing something wrong.
 
 ## Notes and caveats
 
-- **Aspect ratio.** The image is scaled to cover the full virtual desktop and
-  the overflow is cropped. Two 16:9 monitors side by side make a 32:9 canvas, so
-  an ordinary 16:9 wallpaper loses roughly its top and bottom thirds.
-  Ultrawide-sourced wallpapers look dramatically better. Nothing is ever
-  stretched — aspect ratio is always preserved.
+- **Aspect ratio.** The image is scaled to cover the whole virtual desktop and
+  whatever overflows is cropped. Two 16:9 monitors side by side make a 32:9
+  canvas, so an ordinary 16:9 wallpaper loses half its height (a quarter off
+  the top and a quarter off the bottom); three make 48:9 and it loses two
+  thirds. Ultrawide or panoramic wallpapers look much better. Nothing is ever
+  stretched: the aspect ratio is always preserved.
 - **Non-rectangular layouts.** If your monitors are not aligned (say one sits
-  200px lower than the other), the bounding box includes the empty L-shaped
-  region. That area is simply not visible on any screen; the parts you can see
-  still line up correctly.
+  200px lower than the other), the bounding box includes an empty L-shaped
+  region. That part of the image is not shown on any screen; the parts you can
+  see still line up correctly.
 - **Fractional scaling.** Alignment is computed in logical pixels, so on
   fractional scale factors the seam can land on a fractional device pixel. Any
   resulting misalignment is sub-pixel and not visible in practice.
@@ -145,10 +148,10 @@ falls back to stock per-monitor rendering rather than drawing something wrong.
 ## What it does on your system
 
 Omarchy plugins run unsandboxed inside the shell process, so here is the full
-list of what this one touches. Every file read and every command invocation
-routes through a bundled bash helper in `bin/`; the QML never issues a shell
-string, and every helper is invoked by absolute path with its arguments as
-separate argv elements.
+list of what this one touches. Apart from the wallpaper image itself (loaded by
+Qt, see below), every file read and every command goes through a bundled bash
+helper in `bin/`. The QML never builds a shell string, and every helper is
+started by absolute path with its arguments as separate argv elements.
 
 - **Reads**, via `bin/resolve-bg`, the symlink Omarchy maintains at
   `~/.local/state/omarchy/current/background`. The helper caps `readlink`
@@ -160,13 +163,13 @@ separate argv elements.
   using `dd iflag=nofollow,nonblock,count_bytes` at most 129 bytes at a time,
   so a symlink or FIFO planted at that name is refused rather than followed
   or blocked on.
-- **Writes**, via `bin/write-conf`, the same file. The write creates an
-  unpredictable temporary via `mktemp` in the destination directory, chmods it
-  600, writes and fsyncs the payload, `mv -f -T`s it over the destination and
-  fsyncs the directory — so a planted symlink at the destination is
-  *replaced* by `rename(2)` rather than truncating whatever it pointed at.
-  The value on argv is validated against the closed set `{on, off}` before
-  the helper touches the filesystem.
+- **Writes**, via `bin/write-conf`, the same file. The helper creates an
+  unpredictable temporary with `mktemp` in the destination directory (mode 600
+  from creation), writes and fsyncs the payload, `mv -f -T`s it over the
+  destination and fsyncs the directory. A symlink planted at the destination
+  is therefore *replaced* by `rename(2)` rather than written through. The
+  value on argv is checked against the closed set `{on, off}` before the
+  helper touches the filesystem.
 - **Runs**, only when you double-click the desktop, the same two commands the
   stock plugin runs: `omarchy-theme-bg-switcher` / `omarchy-theme-bg-set` and
   `omarchy-theme-switcher` / `omarchy-theme-set`. Each picker runs under
@@ -178,18 +181,20 @@ separate argv elements.
   element of the setter.
 - The three file helpers (`resolve-bg`, `read-conf`, `write-conf`) run with a
   cleared environment holding only `HOME` and `PATH=/usr/bin`.
-- Reads the wallpaper image itself. Every path that reaches `Image.source`
-  is either produced by a helper above or arrives via IPC and is put through
-  the same absolute-path + control-char + length check.
+- **Reads** the wallpaper image itself, through Qt's image loader. Every
+  path that reaches `Image.source`, whether it comes from `bin/resolve-bg` or
+  arrives over IPC, must be an absolute path or `file://` URL, free of control
+  characters and at most 4096 characters long.
 - **No network access, no elevated privileges, no external packages**, and
   nothing outside `~/.config/omarchy/spanned-background.conf` is ever written.
 
-The `background` IPC surface exposes `refresh`, `set`, `setInstant`,
-`transition`, `themeTransition` and `span`. Every string argument is capped,
-control-character-rejected, and required to be an absolute path or `file://`
-URL (`span` is further restricted to `on|off|toggle|true|false|1|0|""` and
-capped at 32 bytes). `themeTransition`'s two base64 payloads are each capped
-at 128 KiB decoded before they reach the theme loader.
+The `background` IPC target exposes `refresh`, `set`, `setInstant`,
+`transition` and `themeTransition` (the same methods as the stock service, so
+Omarchy's own tools keep working), plus `span`. Every path argument goes
+through the check above. `span` accepts only
+`on|off|toggle|true|false|1|0` or an empty string (toggle) and at most 32
+characters. `themeTransition`'s two base64 payloads are each capped at
+128 KiB decoded before they reach the theme loader.
 
 ## Issues
 
