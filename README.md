@@ -1,4 +1,4 @@
-# Spanned Background
+# Spanned-Background - Wallpaper Spanning
 
 ![Spanned Background: the stock service shows one copy of the wallpaper per monitor; this plugin draws one wallpaper across all of them.](preview.png)
 
