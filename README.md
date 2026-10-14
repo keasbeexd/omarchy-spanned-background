@@ -1,6 +1,6 @@
 # Spanned-Background - Wallpaper Spanning
 
-![Spanned Background, drawn as a Turbo Pascal–style DOS screen: the stock service shows one copy of the wallpaper per monitor; this plugin draws one wallpaper across all of them.](preview.png)
+![Spanned Background, drawn as a Turbo Pascal–style DOS screen: three monitors sharing one sunset wallpaper that runs edge to edge across all of them.](preview.png)
 
 An [Omarchy](https://omarchy.org) **Quattro** shell plugin that treats all of
 your monitors as one continuous canvas and paints a single wallpaper across
