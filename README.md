@@ -11,18 +11,14 @@ The preview is an illustration, not a screenshot: the plugin draws no UI of
 its own. What it changes is the wallpaper, which runs as one image across all
 of your monitors instead of one copy per monitor.
 
-An [Omarchy](https://omarchy.org) **Quattro** shell plugin that treats all of
-your monitors as one continuous canvas and paints a single wallpaper across
-them, like the Windows "Span" wallpaper setting.
+The plugin works like the Windows "Span" wallpaper setting, for
+[Omarchy](https://omarchy.org) **Quattro**. The image runs edge to edge with no
+bezel compensation: the last pixel on the right of one monitor is followed
+directly by the first pixel on the left of the next.
 
-The image runs edge to edge with no bezel compensation: the last pixel on the
-right of one monitor is followed directly by the first pixel on the left of the
-next.
-
-It replaces the built-in `omarchy.background` service, and everything else
-keeps working as before: `omarchy-theme-bg-set`, the `Super + Ctrl + Space`
-background picker, theme switching with its diagonal wipe, and double-clicking
-the desktop.
+Everything the built-in `omarchy.background` service does keeps working:
+`omarchy-theme-bg-set`, the `Super + Ctrl + Space` background picker, theme
+switching with its diagonal wipe, and double-clicking the desktop.
 
 ## Requirements
 
