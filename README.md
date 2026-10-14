@@ -1,19 +1,24 @@
 # Spanned-Background - Wallpaper Spanning
 
-![Spanned Background: the stock service shows one copy of the wallpaper per monitor; this plugin draws one wallpaper across all of them.](preview.png)
+One wallpaper across every monitor, in the Omarchy shell. A drop-in
+replacement for the stock background service.
 
-An [Omarchy](https://omarchy.org) **Quattro** shell plugin that treats all of
-your monitors as one continuous canvas and paints a single wallpaper across
-them, like the Windows "Span" wallpaper setting.
+<img src="docs/logo.svg" width="96" alt="Spanned Background's three monitors sharing one sunset, in 16 EGA colors">
 
-The image runs edge to edge with no bezel compensation: the last pixel on the
-right of one monitor is followed directly by the first pixel on the left of the
-next.
+![Spanned Background in a Turbo Pascal-style screen: three monitors sharing one sunset wallpaper, edge to edge](preview.png)
 
-It replaces the built-in `omarchy.background` service, and everything else
-keeps working as before: `omarchy-theme-bg-set`, the `Super + Ctrl + Space`
-background picker, theme switching with its diagonal wipe, and double-clicking
-the desktop.
+The preview is an illustration, not a screenshot: the plugin draws no UI of
+its own. What it changes is the wallpaper, which runs as one image across all
+of your monitors instead of one copy per monitor.
+
+The plugin works like the Windows "Span" wallpaper setting, for
+[Omarchy](https://omarchy.org) **Quattro**. The image runs edge to edge with no
+bezel compensation: the last pixel on the right of one monitor is followed
+directly by the first pixel on the left of the next.
+
+Everything the built-in `omarchy.background` service does keeps working:
+`omarchy-theme-bg-set`, the `Super + Ctrl + Space` background picker, theme
+switching with its diagonal wipe, and double-clicking the desktop.
 
 ## Requirements
 
