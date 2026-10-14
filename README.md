@@ -1,6 +1,15 @@
 # Spanned-Background - Wallpaper Spanning
 
-![Spanned Background, drawn as a Turbo Pascal–style DOS screen: three monitors sharing one sunset wallpaper that runs edge to edge across all of them.](preview.png)
+One wallpaper across every monitor, in the Omarchy shell. A drop-in
+replacement for the stock background service.
+
+<img src="docs/logo.svg" width="96" alt="Spanned Background's three monitors sharing one sunset, in 16 EGA colors">
+
+![Spanned Background in a Turbo Pascal-style screen: three monitors sharing one sunset wallpaper, edge to edge](preview.png)
+
+The preview is an illustration, not a screenshot: the plugin draws no UI of
+its own. What it changes is the wallpaper, which runs as one image across all
+of your monitors instead of one copy per monitor.
 
 An [Omarchy](https://omarchy.org) **Quattro** shell plugin that treats all of
 your monitors as one continuous canvas and paints a single wallpaper across
