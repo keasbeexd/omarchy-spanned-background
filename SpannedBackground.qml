@@ -28,8 +28,6 @@ Item {
   readonly property real revealSlant: -0.18 // diagonal of the theme-change wipe
 
   readonly property string home: Quickshell.env("HOME")
-  readonly property string stateHome: home + "/.local/state"
-  readonly property string currentBackgroundLink: stateHome + "/omarchy/current/background"
 
   // Absolute filesystem path of the directory this QML file lives in, so every
   // bundled helper is invoked by a fully-qualified path rather than a name
@@ -74,6 +72,11 @@ Item {
   readonly property bool spanning: spanEnabled && geometryValid
 
   function imageUrl(path) {
+    // A path that already is a file:// URL goes straight through: Util.fileUrl
+    // prepends the scheme unconditionally, so handing it one would produce
+    // file://file:///... and Image.source would resolve nothing. An absolute
+    // path is the other accepted form -- see normalisePath.
+    if (path.substring(0, 7) === "file://") return path
     return Util.fileUrl(path)
   }
 
