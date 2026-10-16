@@ -25,7 +25,8 @@ switching with its diagonal wipe, and double-clicking the desktop.
 - Omarchy 4.x ("Quattro"). This plugin targets the Quickshell-based
   `omarchy-shell` and does **not** work on Omarchy 3 or earlier.
 - Two or more monitors to see any difference. With a single monitor it behaves
-  exactly like the stock background service.
+  exactly like the stock background service, and with no monitor connected at
+  all it simply draws nothing (there is no window to draw into).
 - No external packages. It uses only what Omarchy already ships.
 
 ## Install
@@ -165,9 +166,9 @@ started by absolute path with its arguments as separate argv elements.
   `/usr/share/omarchy/themes/`), and rejects paths with control characters
   before the result reaches the wallpaper renderer.
 - **Reads**, via `bin/read-conf`, `~/.config/omarchy/spanned-background.conf`
-  using `dd iflag=nofollow,nonblock,count_bytes` at most 129 bytes at a time,
-  so a symlink or FIFO planted at that name is refused rather than followed
-  or blocked on.
+  using `dd iflag=nofollow,nonblock,count_bytes,fullblock bs=1` for at most 129
+  bytes, so a symlink or FIFO planted at that name is refused rather than
+  followed or blocked on.
 - **Writes**, via `bin/write-conf`, the same file. The helper creates an
   unpredictable temporary with `mktemp` in the destination directory (mode 600
   from creation), writes and fsyncs the payload, `mv -f -T`s it over the
@@ -191,7 +192,9 @@ started by absolute path with its arguments as separate argv elements.
   arrives over IPC, must be an absolute path or `file://` URL, free of control
   characters and at most 4096 characters long.
 - **No network access, no elevated privileges, no external packages**, and
-  nothing outside `~/.config/omarchy/spanned-background.conf` is ever written.
+  nothing outside `~/.config/omarchy/spanned-background.conf` is ever written
+  (if `~/.config/omarchy` does not exist, the write helper creates it, mode
+  700, so it has somewhere to put that file).
 
 The `background` IPC target exposes `refresh`, `set`, `setInstant`,
 `transition` and `themeTransition` (the same methods as the stock service, so
