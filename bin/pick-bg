@@ -33,7 +33,7 @@ bytelen() { local LC_ALL=C; printf '%s' "${#1}"; }
 # a foreground wait: bash defers traps until a foreground command finishes,
 # but `wait` is interrupted by them. Its output is a single short line, well
 # inside the pipe buffer, so nothing stalls while we wait for it to exit.
-exec {out}< <(exec /usr/bin/timeout -k 2 60 omarchy-theme-bg-switcher 2>/dev/null)
+exec {out}< <(exec /usr/bin/timeout -k 2 600 omarchy-theme-bg-switcher 2>/dev/null)
 picker=$!
 trap '/usr/bin/kill -TERM "$picker" 2>/dev/null; exit 143' TERM INT HUP
 wait "$picker"
@@ -71,8 +71,16 @@ case "$sel" in
     exit 1 ;;
 esac
 
-# omarchy-theme-bg-set takes the path as its single positional argument.
-# The `--` separator prevents a leading `-` from being read as an option.
+# A background is an absolute path. omarchy-theme-bg-set reads its first
+# argument as the path and knows no `--` separator, so a leading `-` is kept
+# away from it here instead.
+case "$sel" in
+  /*) : ;;
+  *)
+    echo "spanned-background/pick-bg: picker output rejected (not an absolute path)" >&2
+    exit 1 ;;
+esac
+
 # `exec` makes `timeout` this process, so a TERM from the shell lands on it
 # and is forwarded to the setter's whole process group.
-exec /usr/bin/timeout -k 2 30 omarchy-theme-bg-set -- "$sel"
+exec /usr/bin/timeout -k 2 30 omarchy-theme-bg-set "$sel"

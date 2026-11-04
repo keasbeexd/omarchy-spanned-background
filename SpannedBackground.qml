@@ -59,6 +59,8 @@ Item {
   property string pendingColorsRaw: ""
   property string pendingShellRaw: ""
   property real revealProgress: 1
+  // True while owe's renderer covers the desktop: at login, and for a video.
+  property bool suspended: false
 
   // Bounding box of every output, in compositor logical coordinates. Because
   // Hyprland lays every monitor out in one logical coordinate space, this works
@@ -71,7 +73,13 @@ Item {
 
   readonly property bool spanning: spanEnabled && geometryValid
 
+  // owe plays video wallpapers on its own layer; this one draws stills.
+  function isVideo(path) {
+    return /\.(mp4|m4v|mov|webm|mkv|avi)$/i.test(String(path || ""))
+  }
+
   function imageUrl(path) {
+    if (isVideo(path)) return ""
     // A path that already is a file:// URL goes straight through: Util.fileUrl
     // prepends the scheme unconditionally, so handing it one would produce
     // file://file:///... and Image.source would resolve nothing. An absolute
@@ -185,7 +193,8 @@ Item {
     revealAnimation.stop()
     finishingTransition = false
 
-    if (instant || !displayedBackground) {
+    // The wipe is image-only, so a video on either side of it switches at once.
+    if (instant || !displayedBackground || isVideo(cleanPath) || isVideo(displayedBackground)) {
       oldBackground = ""
       incomingBackground = ""
       displayedBackground = cleanPath
@@ -413,9 +422,9 @@ Item {
   // Watchdogs: each Process has an outer QML deadline that TERM/KILL-escalates
   // the wrapper if the in-helper `timeout` somehow fails to fire. A TERM to a
   // picker helper is forwarded to its `timeout`, which unwinds the subtree.
-  Timer { id: pickBgWatchdog;      interval: 90000; repeat: false; onTriggered: if (pickBgProc.running)    { pickBgProc.signal(15);    pickBgKillTimer.restart() } }
+  Timer { id: pickBgWatchdog;      interval: 630000; repeat: false; onTriggered: if (pickBgProc.running)    { pickBgProc.signal(15);    pickBgKillTimer.restart() } }
   Timer { id: pickBgKillTimer;     interval: 2000;  repeat: false; onTriggered: if (pickBgProc.running)    pickBgProc.signal(9) }
-  Timer { id: pickThemeWatchdog;   interval: 90000; repeat: false; onTriggered: if (pickThemeProc.running) { pickThemeProc.signal(15); pickThemeKillTimer.restart() } }
+  Timer { id: pickThemeWatchdog;   interval: 630000; repeat: false; onTriggered: if (pickThemeProc.running) { pickThemeProc.signal(15); pickThemeKillTimer.restart() } }
   Timer { id: pickThemeKillTimer;  interval: 2000;  repeat: false; onTriggered: if (pickThemeProc.running) pickThemeProc.signal(9) }
   Timer { id: resolveBgWatchdog;   interval: 10000; repeat: false; onTriggered: if (resolveBgProc.running) { resolveBgProc.signal(15); resolveBgKillTimer.restart() } }
   Timer { id: resolveBgKillTimer;  interval: 2000;  repeat: false; onTriggered: if (resolveBgProc.running) resolveBgProc.signal(9) }
@@ -437,6 +446,18 @@ Item {
 
     function setInstant(path: string): void {
       root.setBackground(path, true)
+    }
+
+    // owe calls this to hand the desktop over and back. Without it the call
+    // fails and owe falls back to setPluginEnabled, which turns the built-in
+    // omarchy.background on again in shell.json, on top of this plugin.
+    function setSuspended(value: string): void {
+      root.suspended = value === "true"
+    }
+
+    // A theme switch names its next background early so stock can decode it
+    // ahead of the transition. Accepted so the call succeeds; nothing to do.
+    function prepare(path: string): void {
     }
 
     function transition(fromPath: string, path: string): void {
@@ -542,7 +563,7 @@ Item {
 
       screen: modelData
       anchors { top: true; bottom: true; left: true; right: true }
-      visible: !remapGuard.remapping
+      visible: !remapGuard.remapping && !root.suspended
       color: "transparent"
 
       // Kept from the stock plugin: a background surface that stops receiving

@@ -5,7 +5,7 @@ replacement for the stock background service.
 
 <img src="docs/logo.svg" width="96" alt="Spanned Background's three monitors sharing one sunset, in 16 EGA colors">
 
-![Spanned Background in a Turbo Pascal-style screen: three monitors sharing one sunset wallpaper, edge to edge](preview.png)
+![Three monitors of different sizes sharing one sunset wallpaper, edge to edge](preview.png)
 
 The preview is an illustration, not a screenshot: the plugin draws no UI of
 its own. What it changes is the wallpaper, which runs as one image across all
@@ -18,7 +18,9 @@ directly by the first pixel on the left of the next.
 
 Everything the built-in `omarchy.background` service does keeps working:
 `omarchy-theme-bg-set`, the `Super + Ctrl + Space` background picker, theme
-switching with its diagonal wipe, and double-clicking the desktop.
+switching with its diagonal wipe, and double-clicking the desktop. Video
+wallpapers still play, but one per monitor: Omarchy's `owe` engine draws them
+on its own layer, and only still images span.
 
 ## Requirements
 
@@ -179,12 +181,13 @@ started by absolute path with its arguments as separate argv elements.
 - **Runs**, only when you double-click the desktop, the same two commands the
   stock plugin runs: `omarchy-theme-bg-switcher` / `omarchy-theme-bg-set` and
   `omarchy-theme-switcher` / `omarchy-theme-set`. Each picker runs under
-  `timeout -k 2 60` (each setter under `timeout -k 2 30`) in `bin/pick-bg` /
+  `timeout -k 2 600` (each setter under `timeout -k 2 30`) in `bin/pick-bg` /
   `bin/pick-theme`, in its own process group; when the shell stops the
   helper, the helper forwards the signal so the picker and everything it
   started exits too. The picker's output is capped at 4 KiB (measured in
-  bytes) and control characters are rejected before it becomes an argv
-  element of the setter.
+  bytes), and control characters, relative wallpaper paths and theme names
+  with a leading dash are rejected before it becomes an argv element of the
+  setter.
 - The three file helpers (`resolve-bg`, `read-conf`, `write-conf`) run with a
   cleared environment holding only `HOME` and `PATH=/usr/bin`.
 - **Reads** the wallpaper image itself, through Qt's image loader. Every
@@ -197,9 +200,12 @@ started by absolute path with its arguments as separate argv elements.
   700, so it has somewhere to put that file).
 
 The `background` IPC target exposes `refresh`, `set`, `setInstant`,
-`transition` and `themeTransition` (the same methods as the stock service, so
-Omarchy's own tools keep working), plus `span`. Every path argument goes
-through the check above. `span` accepts only
+`setSuspended`, `transition`, `themeTransition` and `prepare` (the same methods
+as the stock service, so Omarchy's own tools keep working), plus `span`.
+Without `setSuspended`, `owe` falls back to switching the built-in
+`omarchy.background` back on in `shell.json`. It only hides or shows this
+plugin's layer, and `prepare` accepts its path and does nothing with it. Every
+other path argument goes through the check above. `span` accepts only
 `on|off|toggle|true|false|1|0` or an empty string (toggle) and at most 32
 characters. `themeTransition`'s two base64 payloads are each capped at
 128 KiB decoded before they reach the theme loader.
