@@ -11,7 +11,7 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 bytelen() { local LC_ALL=C; printf '%s' "${#1}"; }
 
-exec {out}< <(exec /usr/bin/timeout -k 2 60 omarchy-theme-switcher 2>/dev/null)
+exec {out}< <(exec /usr/bin/timeout -k 2 600 omarchy-theme-switcher 2>/dev/null)
 picker=$!
 trap '/usr/bin/kill -TERM "$picker" 2>/dev/null; exit 143' TERM INT HUP
 wait "$picker"
@@ -39,7 +39,15 @@ case "$sel" in
     exit 1 ;;
 esac
 
+# omarchy-theme-set reads its first argument as the theme and knows no `--`
+# separator, so a leading `-` is kept away from it here instead.
+case "$sel" in
+  -*)
+    echo "spanned-background/pick-theme: picker output rejected (leading dash)" >&2
+    exit 1 ;;
+esac
+
 # omarchy-theme-set swaps many components and re-emits our own IPC. `exec`
 # makes `timeout` this process, so the shell's TERM reaches the setter's
 # whole process group.
-exec /usr/bin/timeout -k 2 30 omarchy-theme-set -- "$sel"
+exec /usr/bin/timeout -k 2 30 omarchy-theme-set "$sel"
