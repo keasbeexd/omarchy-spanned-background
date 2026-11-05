@@ -21,7 +21,7 @@ Spanned Background is an Omarchy shell plugin that replaces the stock
 background service. It installs nothing and needs no root. Examples of what
 we want to hear about:
 
-- a way for a wallpaper path, an image file or a theme to make the plugin
+- a way for a wallpaper path, an image or video file or a theme to make the plugin
   run a command, read a file outside what it shows, or write anything;
 - anything that lets another account on the machine influence what the
   plugin loads.

@@ -1,0 +1,110 @@
+#!/usr/bin/bash
+# Report the video owe is drawing, so the spanned video layer plays the same
+# file. Prints one line, "<intro>\t<paused>\t<path>" with 0 or 1 for the two
+# flags, and nothing at all unless owe's renderer owns the desktop and the
+# reply passes every check below. Prints "locked" while the session is locked.
+#
+# owe's replies are capped at the producer and parsed by a fixed jq filter. The
+# path gets the same checks as bin/resolve-bg, plus a video extension, because
+# it goes on to the media player.
+
+set -uo pipefail
+: "${HOME:?HOME is not set}"
+: "${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}"
+
+MAX_REPLY=8192
+MAX_PATH=4096
+
+bytelen() { local LC_ALL=C; printf '%s' "${#1}"; }
+
+# A renderer that is not running exits non-zero, which ends the helper quietly.
+ask() {
+  /usr/bin/timeout -k 1 2 /usr/bin/owe "$1" 2>/dev/null | /usr/bin/head -c $((MAX_REPLY + 1))
+}
+
+# owe stops answering for most of a lock, so its pause never gets reported, and
+# a player left running would decode behind the lock screen for nothing.
+# Hyprland reports an active session lock as a reason a monitor cannot go
+# solitary, the same check omarchy-hyprland-session-locked makes.
+if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+  monitors=$(/usr/bin/timeout -k 1 1 /usr/bin/hyprctl -j monitors 2>/dev/null | /usr/bin/head -c $((MAX_REPLY * 4 + 1)))
+  if [ "$(bytelen "$monitors")" -le $((MAX_REPLY * 4)) ] &&
+     printf '%s' "$monitors" | /usr/bin/jq -e 'any(.[]; (.solitaryBlockedBy // []) | index("LOCK"))' >/dev/null 2>&1; then
+    printf 'locked'
+    exit 0
+  fi
+fi
+
+status=$(ask status) || exit 0
+[ "$(bytelen "$status")" -le "$MAX_REPLY" ] || exit 0
+# A warm renderer can hold a prepared video that nothing is showing yet.
+engine=$(printf '%s' "$status" | /usr/bin/jq -r '.engine // ""' 2>/dev/null) || exit 0
+[ "$engine" = "renderer" ] || exit 0
+
+render=$(ask render-status) || exit 0
+[ "$(bytelen "$render")" -le "$MAX_REPLY" ] || exit 0
+fields=$(printf '%s' "$render" | /usr/bin/jq -r '
+  if .kind == "video" and (.path | type) == "string" then
+    [(if .intro == true then "1" else "0" end),
+     (if .paused == true then "1" else "0" end),
+     .path] | @tsv
+  else empty end' 2>/dev/null) || exit 0
+[ -n "$fields" ] || exit 0
+
+IFS=$'\t' read -r intro paused path <<<"$fields"
+[ -n "${path:-}" ] || exit 0
+[ "$(bytelen "$path")" -le "$MAX_PATH" ] || exit 0
+
+case "$path" in
+  /*) ;;
+  *) exit 0 ;;
+esac
+# @tsv writes a tab, newline or backslash in a value as an escape, so a
+# backslash here means the path is not the one owe reported.
+case "$path" in
+  *[[:cntrl:]]*|*\\*) exit 0 ;;
+esac
+
+# A theme switch hands owe the intro as a descriptor, because the theme's
+# directory is renamed while it plays. The path owe reports is then a /proc link
+# that has already closed. The background link has moved to the new still by
+# then, and an intro sits beside its still under a fixed name, the rule
+# omarchy-theme-bg-boot-intro uses to pick it.
+if [[ $path =~ ^/proc/[0-9]+/fd/[0-9]+$ ]]; then
+  [ "$intro" = "1" ] || exit 0
+  still=$(/usr/bin/readlink -f -- "$HOME/.local/state/omarchy/current/background" 2>/dev/null \
+            | /usr/bin/head -c $((MAX_PATH + 1))) || exit 0
+  [ "$(bytelen "$still")" -le "$MAX_PATH" ] || exit 0
+  stem=${still##*/}
+  stem=${stem%.*}
+  path=""
+  for extension in mp4 m4v mov webm mkv avi; do
+    candidate="${still%/*}/intros/$stem.$extension"
+    if [ -f "$candidate" ]; then
+      path=$candidate
+      break
+    fi
+  done
+  [ -n "$path" ] || exit 0
+fi
+
+path=$(/usr/bin/readlink -f -- "$path" 2>/dev/null | /usr/bin/head -c $((MAX_PATH + 1))) || exit 0
+[ -n "$path" ] && [ "$(bytelen "$path")" -le "$MAX_PATH" ] || exit 0
+case "$path" in
+  /*) ;;
+  *) exit 0 ;;
+esac
+case "$path" in
+  *[[:cntrl:]]*) exit 0 ;;
+esac
+shopt -s nocasematch
+[[ $path =~ \.(mp4|m4v|mov|webm|mkv|avi)$ ]] || exit 0
+shopt -u nocasematch
+[ ! -L "$path" ] && [ -f "$path" ] || exit 0
+owner=$(/usr/bin/stat -Lc %u -- "$path" 2>/dev/null)
+uid=$(/usr/bin/id -u)
+if [ -z "$owner" ] || { [ "$owner" != "$uid" ] && [ "$owner" != "0" ]; }; then
+  exit 0
+fi
+
+printf '%s\t%s\t%s' "$intro" "$paused" "$path"
