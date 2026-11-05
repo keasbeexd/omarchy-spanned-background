@@ -2,14 +2,18 @@
   "schemaVersion": 1,
   "id": "keasbeexd.spanned-background",
   "name": "Spanned Background",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "author": "Marc @keasbeexd",
-  "description": "Draws one wallpaper stretched across every connected monitor, Windows 'Span' style. Drop-in replacement for the built-in omarchy.background service.",
+  "description": "Draws one wallpaper or video across every connected monitor, Windows 'Span' style. Drop-in replacement for the built-in omarchy.background service.",
   "license": "MIT",
   "kinds": [
     "service"
   ],
   "entryPoints": {
     "service": "SpannedBackground.qml"
+  },
+  "omarchy": {
+    "clonedFrom": "omarchy.background",
+    "clonedFromCommit": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
   }
 }

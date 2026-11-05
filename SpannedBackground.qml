@@ -60,7 +60,39 @@ Item {
   property string pendingShellRaw: ""
   property real revealProgress: 1
   // True while owe's renderer covers the desktop: at login, and for a video.
+  // The shell's theme cover waits on this, so with spanned video it turns true
+  // at the first spanned frame rather than at owe's handoff.
   property bool suspended: false
+  // owe has taken the desktop. See setOweActive.
+  property bool oweActive: false
+  // What the spanned video layer plays, reported by bin/owe-video.
+  property string videoPath: ""
+  property string videoRefused: ""
+  // The video layer is up showing heldStill, for the video to fade in over.
+  // That still is the desktop's own, kept current so it is ready when needed.
+  property bool holding: false
+  property string heldStill: ""
+  // A theme cover is up, so the layer in front of it has to stay until the next
+  // video has frames, whatever owe does in between.
+  property bool coverPending: false
+  // A video in front of it hides any change, so only a bare hold pins the still.
+  onDisplayedBackgroundChanged: if ((!holding || videoPath) && !isVideo(displayedBackground)) heldStill = displayedBackground
+  property bool videoProbe: true
+  property bool videoLoop: false
+  property bool videoPaused: false
+  readonly property bool canSpanVideo: videoLoader.status === Loader.Ready
+  onCanSpanVideoChanged: if (oweActive) setOweActive(true)
+
+  // The shell's startup cover waits on this. A video is OWE's to draw, so it
+  // has nothing to wait for here.
+  readonly property bool ready: {
+    if (isVideo(displayedBackground)) return true
+    if (backgrounds.instances.length === 0) return false
+    for (var i = 0; i < backgrounds.instances.length; i++) {
+      if (!backgrounds.instances[i].backgroundReady) return false
+    }
+    return true
+  }
 
   // Bounding box of every output, in compositor logical coordinates. Because
   // Hyprland lays every monitor out in one logical coordinate space, this works
@@ -84,6 +116,11 @@ Item {
     // prepends the scheme unconditionally, so handing it one would produce
     // file://file:///... and Image.source would resolve nothing. An absolute
     // path is the other accepted form -- see normalisePath.
+    if (path.substring(0, 7) === "file://") return path
+    return Util.fileUrl(path)
+  }
+
+  function mediaUrl(path) {
     if (path.substring(0, 7) === "file://") return path
     return Util.fileUrl(path)
   }
@@ -190,6 +227,12 @@ Item {
     backgroundVersion += 1
     revealStartedVersion = -1
 
+    // OWE fades the last still into a video, so that still stays up until OWE
+    // has its first frame and suspends this layer. Dropping it now would leave
+    // the desktop empty in between. A running wipe finishes on its incoming
+    // still for the same reason.
+    if (!instant && !suspended && displayedBackground && isVideo(cleanPath) && !isVideo(displayedBackground)) return
+
     revealAnimation.stop()
     finishingTransition = false
 
@@ -256,6 +299,98 @@ Item {
     revealStartedVersion = backgroundVersion
     applyPendingTheme()
     revealAnimation.restart()
+  }
+
+  // owe draws a separate copy of a video on each output, so while spanning the
+  // video is drawn again on top of owe's. The stills stay up until the first
+  // spanned frame, and the shell's cover with them, so owe's per-monitor
+  // picture never shows. If that frame does not arrive, owe's copy is what
+  // the handover timer falls back to.
+  function setOweActive(active) {
+    oweActive = active
+    if (!active) {
+      videoHandoverTimer.stop()
+      // The stills map again, which is not a theme cover.
+      if (videoLoader.item) videoLoader.item.ignoreLayersUntil = Date.now() + 200
+      suspended = false
+      videoReleaseTimer.tries = 0
+      videoReleaseTimer.restart()
+      return
+    }
+    videoReleaseTimer.stop()
+    if (!canSpanVideo) {
+      stopHolding()
+      videoPath = ""
+      suspended = true
+      return
+    }
+    videoLoader.item.cancelDismiss()
+    holding = true
+    if (!suspended) videoHandoverTimer.restart()
+    queryVideo()
+  }
+
+  function finishVideo() {
+    videoPath = ""
+    videoRefused = ""
+    stopHolding()
+  }
+
+  function stopHolding() {
+    videoHoldTimer.stop()
+    holding = false
+    if (!isVideo(displayedBackground)) heldStill = displayedBackground
+  }
+
+  // The shell puts up a cover of the old wallpaper for a theme intro, cropped
+  // to each monitor rather than to the canvas, and it maps above everything
+  // already on its layer. So the video layer moves on top of it, holding the
+  // spanned still, and the cover never shows. The hold ends by itself if
+  // no video follows.
+  function holdOverCover() {
+    if (!canSpanVideo) return
+    videoReleaseTimer.stop()
+    videoLoader.item.cancelDismiss()
+    videoLoader.item.raise()
+    holding = true
+    coverPending = true
+    videoHoldTimer.restart()
+  }
+
+  function queryVideo() {
+    if (!videoProc.running) {
+      videoProc.buffer = ""
+      videoProc.overflow = false
+      videoProc.running = true
+    }
+  }
+
+  function applyVideoState(payload) {
+    if (payload === "locked") {
+      if (videoLoop) videoPaused = true
+      return
+    }
+    var probing = videoProbe
+    videoProbe = false
+    var fields = String(payload || "").split("\t")
+    if (fields.length !== 3) return
+    var path = normalisePath(fields[2])
+    if (!path || !isVideo(path) || path === videoRefused) return
+    if (!canSpanVideo) return
+    // A shell restart or a login can miss owe's setSuspended call. Only the
+    // probe at startup may conclude that: any later reply can be a stale one
+    // that lands after owe handed the desktop back.
+    if (!oweActive) {
+      if (!probing) return
+      oweActive = true
+      videoHandoverTimer.restart()
+    }
+    var intro = fields[0] === "1"
+    videoLoop = !intro
+    videoPaused = !intro && fields[1] === "1"
+    if (path === videoPath) return
+    if (videoPath) videoLoader.item.swapTo(path)
+    else videoPath = path
   }
 
   function applySpan(enabled, persist) {
@@ -365,6 +500,50 @@ Item {
   }
 
   Process {
+    id: videoProc
+    command: [root.helperBin + "/owe-video"]
+    clearEnvironment: true
+    environment: ({
+      "HOME": root.home,
+      "PATH": "/usr/bin",
+      "XDG_RUNTIME_DIR": Quickshell.env("XDG_RUNTIME_DIR"),
+      "HYPRLAND_INSTANCE_SIGNATURE": Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE")
+    })
+
+    property string buffer: ""
+    property bool overflow: false
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        if (videoProc.overflow) return
+        if (videoProc.buffer.length + chunk.length > root.maxPathBytes + 8) {
+          videoProc.overflow = true
+          videoProc.buffer = ""
+          videoProc.signal(15)
+          videoKillTimer.restart()
+          return
+        }
+        videoProc.buffer += chunk
+      }
+    }
+    onExited: {
+      videoWatchdog.stop()
+      videoKillTimer.stop()
+      var payload = videoProc.buffer
+      videoProc.buffer = ""
+      if (videoProc.overflow) {
+        videoProc.overflow = false
+        return
+      }
+      root.applyVideoState(payload)
+    }
+    onRunningChanged: {
+      if (running) videoWatchdog.restart()
+      else videoWatchdog.stop()
+    }
+  }
+
+  Process {
     id: spanReadProc
     command: [root.helperBin + "/read-conf"]
     clearEnvironment: true
@@ -432,6 +611,8 @@ Item {
   Timer { id: spanReadKillTimer;   interval: 2000;  repeat: false; onTriggered: if (spanReadProc.running)  spanReadProc.signal(9) }
   Timer { id: spanWriteWatchdog;   interval: 5000;  repeat: false; onTriggered: if (spanWriteProc.running) { spanWriteProc.signal(15); spanWriteKillTimer.restart() } }
   Timer { id: spanWriteKillTimer;  interval: 2000;  repeat: false; onTriggered: if (spanWriteProc.running) spanWriteProc.signal(9) }
+  Timer { id: videoWatchdog;       interval: 6000;  repeat: false; onTriggered: if (videoProc.running)     { videoProc.signal(15);     videoKillTimer.restart() } }
+  Timer { id: videoKillTimer;      interval: 2000;  repeat: false; onTriggered: if (videoProc.running)     videoProc.signal(9) }
 
   IpcHandler {
     target: "background"
@@ -452,7 +633,7 @@ Item {
     // fails and owe falls back to setPluginEnabled, which turns the built-in
     // omarchy.background on again in shell.json, on top of this plugin.
     function setSuspended(value: string): void {
-      root.suspended = value === "true"
+      root.setOweActive(value === "true")
     }
 
     // A theme switch names its next background early so stock can decode it
@@ -497,6 +678,56 @@ Item {
     }
   }
 
+  // Follows owe while it has the desktop: a new video, and its pause state.
+  Timer {
+    interval: root.videoPath ? 1000 : 250
+    repeat: true
+    running: root.oweActive && root.canSpanVideo
+    onTriggered: root.queryVideo()
+  }
+
+  Timer {
+    id: videoHandoverTimer
+    interval: 1500
+    repeat: false
+    onTriggered: {
+      console.warn("spanned-background: no spanned frame in time, leaving the video to owe")
+      root.suspended = true
+      root.stopHolding()
+    }
+  }
+
+  Timer {
+    id: videoHoldTimer
+    interval: 4000
+    repeat: false
+    onTriggered: {
+      root.coverPending = false
+      if (!root.videoPath) root.stopHolding()
+      else if (!root.oweActive) {
+        videoReleaseTimer.tries = 0
+        videoReleaseTimer.restart()
+      }
+    }
+  }
+
+  // The video's last frame stays up until the still under it has loaded.
+  Timer {
+    id: videoReleaseTimer
+    interval: 400
+    repeat: true
+    property int tries: 0
+    onTriggered: {
+      tries += 1
+      if (root.oweActive || root.coverPending) stop()
+      else if (root.ready || tries >= 8) {
+        stop()
+        if (videoLoader.item) videoLoader.item.dismiss()
+        else root.finishVideo()
+      }
+    }
+  }
+
   Timer {
     id: pendingThemeFallbackTimer
     interval: 300
@@ -531,7 +762,8 @@ Item {
     easing.type: Easing.InOutCubic
     onFinished: {
       if (root.incomingBackground) {
-        root.displayedBackground = root.currentBackground || root.incomingBackground
+        root.displayedBackground = root.currentBackground && !root.isVideo(root.currentBackground)
+          ? root.currentBackground : root.incomingBackground
         root.finishingTransition = true
       }
       root.revealProgress = 1
@@ -542,24 +774,59 @@ Item {
     recomputeGeometry()
     spanReadProc.running = true
     refreshBackground()
+    queryVideo()
   }
 
   // Tear down every helper we spawned when this service is torn down. Sends
   // SIGTERM to the wrapper; the picker helpers forward it to `timeout`, which
   // signals the picker's whole process group.
   Component.onDestruction: {
-    var procs = [pickBgProc, pickThemeProc, resolveBgProc, spanReadProc, spanWriteProc]
+    var procs = [pickBgProc, pickThemeProc, resolveBgProc, spanReadProc, spanWriteProc, videoProc]
     for (var i = 0; i < procs.length; i++) {
       if (procs[i].running) procs[i].signal(15)
     }
   }
 
+  Loader {
+    id: videoLoader
+    active: root.spanning && Quickshell.screens.length > 1
+    source: "VideoSpan.qml"
+    onLoaded: item.host = root
+  }
+
+  Connections {
+    target: videoLoader.item
+    function onStarted() {
+      videoHandoverTimer.stop()
+      videoHoldTimer.stop()
+      root.coverPending = false
+      root.suspended = true
+    }
+    function onCoverOpened() {
+      root.holdOverCover()
+    }
+    function onDismissed() {
+      root.finishVideo()
+    }
+    function onFailed(path) {
+      console.warn("spanned-background: video will not span, leaving it to owe")
+      root.videoRefused = path
+      root.videoPath = ""
+      root.coverPending = false
+      root.stopHolding()
+      videoHandoverTimer.stop()
+      root.suspended = true
+    }
+  }
+
   Variants {
+    id: backgrounds
     model: Quickshell.screens
 
     PanelWindow {
       id: panel
       required property var modelData
+      readonly property bool backgroundReady: base.status === Image.Ready
 
       screen: modelData
       anchors { top: true; bottom: true; left: true; right: true }
