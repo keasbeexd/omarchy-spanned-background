@@ -1,5 +1,7 @@
 # Spanned-Background - Wallpaper Spanning
 
+[![Support on Ko-fi](https://img.shields.io/badge/Support_on-Ko--fi-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/keasbeexd) [![Sponsor on GitHub](https://img.shields.io/badge/Sponsor_on-GitHub-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/keasbeexd)
+
 One wallpaper across every monitor, in the Omarchy shell. A drop-in
 replacement for the stock background service.
 
