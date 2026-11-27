@@ -184,15 +184,9 @@ Item {
 
       screen: modelData
       anchors { top: true; bottom: true; left: true; right: true }
-      visible: !remapGuard.remapping
       color: "transparent"
       // Clicks reach whatever is below, as they would without this layer.
       mask: Region {}
-
-      ScreenMoveRemap {
-        id: remapGuard
-        window: panel
-      }
 
       WlrLayershell.namespace: "omarchy-background"
       WlrLayershell.layer: span.raised ? WlrLayer.Bottom : WlrLayer.Background

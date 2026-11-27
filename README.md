@@ -149,7 +149,10 @@ place. The upstream it tracks is
 at Omarchy v4.5.0, commit `ac2690cd7be4f47e4a255f5e2e78d904d436b068`. It differs
 from that file in spanning, in its helpers in `bin/`, in input bounds on IPC, and
 in the video layer described below. It decodes at full size rather than screen
-size, as noted above.
+size, as noted above. Like the stock service since Omarchy v4.6.0 (commit
+`796e169ab4`), it no longer unmaps and remaps its surfaces when a monitor
+moves: Hyprland now moves layer surfaces with their monitor, and the remap only
+made the wallpaper blink.
 
 ## Notes and caveats
 

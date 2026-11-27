@@ -830,22 +830,13 @@ Item {
 
       screen: modelData
       anchors { top: true; bottom: true; left: true; right: true }
-      visible: !remapGuard.remapping && !root.suspended
+      visible: !root.suspended
       color: "transparent"
 
       // Kept from the stock plugin: a background surface that stops receiving
       // updates has been observed to lose its committed buffer, leaving a black
       // desktop until omarchy-shell is restarted.
       updatesEnabled: true
-
-      // Hyprland leaves an already-mapped layer surface at its old global
-      // position when its monitor moves within the layout, so the surface has
-      // to be unmapped and remapped. Undocking, replugging and `hyprctl reload`
-      // all hit this, and this plugin makes those events load-bearing.
-      ScreenMoveRemap {
-        id: remapGuard
-        window: panel
-      }
 
       WlrLayershell.namespace: "omarchy-background"
       WlrLayershell.layer: WlrLayer.Background
